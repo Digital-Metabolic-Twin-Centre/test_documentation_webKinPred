@@ -12,6 +12,7 @@ import tempfile
 from typing import Any
 
 import pandas as pd
+from rdkit import Chem, rdBase
 import torch
 
 _THIS_FILE = Path(__file__).resolve()
@@ -376,6 +377,15 @@ def _row_smiles(row: dict[str, Any]) -> str:
     return str(substrate).strip()
 
 
+def _is_catpred_supported_substrate(substrate: str) -> bool:
+    if not substrate:
+        return False
+
+    with rdBase.BlockLogs():
+        mol = Chem.MolFromSmiles(substrate)
+    return mol is not None and mol.GetNumHeavyAtoms() > 0
+
+
 def _predict_rows_chunk(
     *,
     rows: list[dict[str, Any]],
@@ -452,7 +462,11 @@ def run_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(substrate, list):
             substrate = substrate[0] if len(substrate) == 1 else ""
         substrate = str(substrate).strip()
-        if not sequence or not substrate or not set(sequence).issubset(_VALID_AAS):
+        if (
+            not sequence
+            or not set(sequence).issubset(_VALID_AAS)
+            or not _is_catpred_supported_substrate(substrate)
+        ):
             invalid_indices.append(idx)
             continue
         valid_rows.append(row)

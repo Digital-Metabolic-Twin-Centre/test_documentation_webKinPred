@@ -7,7 +7,7 @@ from typing import Tuple
 
 import numpy as np
 import pandas as pd
-from rdkit import Chem
+from rdkit import Chem, rdBase
 
 from .types import PreparedInputPaths, PredictionRequest
 
@@ -75,9 +75,14 @@ def _validate_and_prepare_dataframe(parameter: str, df: pd.DataFrame, input_csv:
 
     canonical_smiles = []
     for i, raw_smiles in enumerate(df["SMILES"]):
-        mol = Chem.MolFromSmiles(raw_smiles)
+        with rdBase.BlockLogs():
+            mol = Chem.MolFromSmiles(raw_smiles)
         if mol is None:
             raise ValueError(f'Invalid SMILES input in row {i + 2}: "{raw_smiles}"')
+        if mol.GetNumHeavyAtoms() == 0:
+            raise ValueError(
+                f'Invalid SMILES input in row {i + 2}: "{raw_smiles}" contains no heavy atoms'
+            )
         smiles = Chem.MolToSmiles(mol)
         if parameter == "kcat" and "." in smiles:
             smiles = ".".join(sorted(smiles.split(".")))
