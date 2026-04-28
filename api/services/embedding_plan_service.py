@@ -223,6 +223,12 @@ def expected_paths_by_seq(
             }
         return out
 
+    if method_key == "OmniESI":
+        base = media_path / "sequence_info" / "omniesi_esm2"
+        for seq_id in seq_ids:
+            out[seq_id] = {str((base / f"{seq_id}.pt").resolve())}
+        return out
+
     return {}
 
 
@@ -312,6 +318,8 @@ def _profile_for_method(method_key: str) -> tuple[str | None, bool, str | None]:
         return "eitlem_esm1v", True, None
     if method_key == "CatPred":
         return "catpred_embed", True, None
+    if method_key == "OmniESI":
+        return "omniesi_esm2", True, None
     return None, False, "gpu_offload_not_applicable"
 
 
@@ -346,6 +354,11 @@ def _step_plans_for_profile(
         base = media_path / "sequence_info" / "esm1b_turnup"
         paths = {sid: {str((base / f"{sid}.npy").resolve())} for sid in seq_ids}
         return [_step_from_paths("turnup_esm1b", paths)]
+
+    if profile == "omniesi_esm2":
+        base = media_path / "sequence_info" / "omniesi_esm2"
+        paths = {sid: {str((base / f"{sid}.pt").resolve())} for sid in seq_ids}
+        return [_step_from_paths("omniesi_esm2", paths)]
 
     if profile == "kinform_full":
         base = media_path / "sequence_info"

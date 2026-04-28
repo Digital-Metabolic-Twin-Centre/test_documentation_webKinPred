@@ -23,6 +23,7 @@ STEP_CHOICES = (
     "eitlem_esm1v",
     "catpred_embed_kcat",
     "catpred_embed_km",
+    "omniesi_esm2",
     # Deprecated: superseded by kinform_t5_full
     "kinform_pseq2sites",
     "kinform_prott5_layers",
@@ -518,6 +519,56 @@ def _run_catpred_embed(parameter: str, env: dict[str, str], seq_map_json: Path) 
         catpred_env,
     )
 
+def _run_omniesi_esm2(env: dict[str, str], seq_map_json: Path) -> None:
+    """Compute per-residue ESM2 embeddings for OmniESI.
+
+    Saves <OMNIESI_EMBED_CACHE_DIR>/<seq_id>.pt  shape [seq_len, 1280] cpu float32.
+    Uses the omniesi_env Python which has fair-esm installed.
+    Falls back to KINFORM_ESM_PATH (same ESM2 model, different env) when
+    OMNIESI_EMBED_PYTHON is not set.
+    """
+    omniesi_python = (
+        os.environ.get("OMNIESI_EMBED_PYTHON")
+        or os.environ.get("KINFORM_ESM_PATH")
+        or _python_in_home_env("omniesi_env")
+    )
+    repo_root = Path(env.get("GPU_REPO_ROOT", str(_default_repo_root()))).resolve()
+    worker_script = (
+        repo_root / "tools" / "gpu_embed_service" / "omniesi_esm2_worker.py"
+    ).resolve()
+    _ensure_exists(worker_script, "omniesi_esm2_worker.py")
+
+    media_path = (
+        env.get("KINFORM_MEDIA_PATH")
+        or os.environ.get("KINFORM_MEDIA_PATH", "")
+    )
+    cache_dir = (
+        os.environ.get("OMNIESI_EMBED_CACHE_DIR")
+        or (str((Path(media_path) / "sequence_info" / "omniesi_esm2").resolve()) if media_path else "")
+    )
+    if not cache_dir:
+        raise RuntimeError(
+            "Cannot determine OmniESI embedding cache dir: set OMNIESI_EMBED_CACHE_DIR "
+            "or KINFORM_MEDIA_PATH."
+        )
+
+    batch_size = _env_int("GPU_EMBED_OMNIESI_ESM2_BATCH_SIZE", 1)
+    async_workers = _env_int("GPU_EMBED_CACHE_ASYNC_WORKERS", 8)
+
+    omniesi_env = dict(env)
+    omniesi_env["OMNIESI_EMBED_CACHE_DIR"] = cache_dir
+
+    _run(
+        [
+            omniesi_python,
+            str(worker_script),
+            "--seq-id-to-seq-file", str(seq_map_json),
+            "--cache-dir", cache_dir,
+            "--batch-size", str(batch_size),
+            "--async-workers", str(async_workers),
+        ],
+        omniesi_env,
+    )
 
 def run_step(
     step: str,
@@ -568,6 +619,8 @@ def run_step(
             _run_catpred_embed("kcat", env, seq_map_json)
         elif step == "catpred_embed_km":
             _run_catpred_embed("km", env, seq_map_json)
+        elif step == "omniesi_esm2":
+            _run_omniesi_esm2(env, seq_map_json)
         elif step == "kinform_pseq2sites":
             _run_kinform_pseq2sites(env, seq_map_json)
         elif step == "kinform_prott5_layers":
