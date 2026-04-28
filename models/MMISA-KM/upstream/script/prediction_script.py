@@ -1,33 +1,57 @@
-# models/mmisa_km/upstream/script/prediction_script.py
+# models/MMISA-KM/upstream/script/prediction_script.py
 """
-MMISA-KM batch prediction script for webKinPred integration.
+MMISA-KM batch prediction script for webKinPred generic subprocess engine.
 
-Usage:
-    python prediction_script.py --input input.json --output output.json
+Contract:
+    python prediction_script.py --input <input.json> --output <output.json>
 
-Input JSON format:
-{
-  "rows": [
-    {"sequence": "MKTAY...", "substrates": "CC(=O)O"},
-    ...
-  ]
-}
+Input JSON:
+    {"rows": [{"sequence": "MKTAY...", "substrates": "CC(=O)O"}, ...]}
 
-Output JSON format:
-{
-  "predictions": [12.5, null, 0.045, ...],
-  "invalid_indices": [1, 4, ...]
-}
+Output JSON:
+    {"predictions": [12.5, null, 0.045, ...], "invalid_indices": [1, ...]}
+
+Contact-map cache
+-----------------
+MMISA-KM does not use a PLM, so it does not interact with the shared
+media/sequence_info/ embedding cache.  It has its own contact-map cache
+for protein graph construction.
+
+The cache directory is injected by the platform via:
+    MMISA_KM_CACHE_DIR  — writable directory for runtime contact maps
+                          (set by data_path_env in SubprocessEngineConfig,
+                           resolving DATA_PATHS["MMISA-KM"] in config files)
+
+An optional read-only precomputed map directory can be provided by a
+second env var:
+    MMISA_KM_PRECOMPUTED_DIR  — pre-built contact maps shipped with weights
+                                (also from data_path_env / config_docker.py)
+
+Both are set from config, not probed from MMISA_KM_ROOT, so they resolve
+correctly inside Docker regardless of working directory.
+
+Environment variables (all optional — fallbacks are safe for local dev):
+    MMISA_KM_CACHE_DIR          Writable contact-map cache (platform-injected).
+                                Default: <repo>/cache/mmisa_km
+    MMISA_KM_PRECOMPUTED_DIR    Read-only precomputed contact maps (platform-injected).
+                                Default: none
+    MMISA_KM_ROOT               OmniESI-style root override; used only to
+                                locate trained_model.pt when MMISA_KM_ROOT is
+                                set directly (local dev shortcut).
+    MMISA_KM_CONTACT_MAP_SOURCE Contact-map source: sequential|esmfold|alphafold|template
+                                Default: sequential
+    MMISA_KM_NO_CACHE           Set to "1" to disable contact-map caching.
+    CUDA_VISIBLE_DEVICES        Standard mechanism to select a specific GPU.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
 import os
 import sys
-import logging
 from pathlib import Path
 from typing import Any, Optional
 
@@ -36,24 +60,37 @@ import torch
 from rdkit import Chem
 from torch_geometric.data import Batch, Data
 
-# Add upstream script directory to path for imports
+# ---------------------------------------------------------------------------
+# Resolve upstream script directory and inject into sys.path.
+# ---------------------------------------------------------------------------
 _THIS_DIR = Path(__file__).resolve().parent
-_UPSTREAM_SCRIPT_DIR = _THIS_DIR
-if str(_UPSTREAM_SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(_UPSTREAM_SCRIPT_DIR))
+if str(_THIS_DIR) not in sys.path:
+    sys.path.insert(0, str(_THIS_DIR))
 
-# Import model architecture and feature functions
+# ---------------------------------------------------------------------------
+# RDKit InChI helper — API location changed between rdkit versions.
+# ---------------------------------------------------------------------------
+try:
+    from rdkit.Chem.inchi import MolFromInchi as _mol_from_inchi
+except ImportError:
+    _mol_from_inchi = getattr(Chem, "MolFromInchi", None)  # type: ignore[assignment]
+
+# ---------------------------------------------------------------------------
+# MMISA-KM source module imports.
+# ---------------------------------------------------------------------------
 from model import GNNNet  # noqa: E402
 from data_process import (  # noqa: E402
     atom_features,
     residue_features,
     encode_smiles,
     encode_sequence,
-    ELEMENT_LIST,
+    ELEMENT_LIST,  # noqa: F401
 )
-from contactmap import generate_contact_map, get_contact_map_cache_path  # noqa: E402
+from contactmap import generate_contact_map  # noqa: E402
 
-# Configure logging
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -67,36 +104,114 @@ logger = logging.getLogger(__name__)
 
 _VALID_AAS = set("ACDEFGHIKLMNPQRSTVWY")
 
-_AA_TO_ID = {
-    "A": 1, "C": 2, "D": 3, "E": 4, "F": 5, "G": 6, "H": 7, "I": 8,
-    "K": 9, "L": 10, "M": 11, "N": 12, "P": 13, "Q": 14, "R": 15,
+_AA_TO_ID: dict[str, int] = {
+    "A": 1,  "C": 2,  "D": 3,  "E": 4,  "F": 5,
+    "G": 6,  "H": 7,  "I": 8,  "K": 9,  "L": 10,
+    "M": 11, "N": 12, "P": 13, "Q": 14, "R": 15,
     "S": 16, "T": 17, "V": 18, "W": 19, "Y": 20, "X": 21,
 }
 
-_CHAR_SMI_SET = {
-    "(": 1, ".": 2, "0": 3, "2": 4, "4": 5, "6": 6, "8": 7, "@": 8,
-    "B": 9, "D": 10, "F": 11, "H": 12, "L": 13, "N": 14, "P": 15,
-    "R": 16, "T": 17, "V": 18, "Z": 19, "\\": 20, "b": 21, "d": 22,
-    "f": 23, "h": 24, "l": 25, "n": 26, "r": 27, "t": 28, "#": 29,
-    "%": 30, ")": 31, "+": 32, "-": 33, "/": 34, "1": 35, "3": 36,
-    "5": 37, "7": 38, "9": 39, "=": 40, "A": 41, "C": 42, "E": 43,
-    "G": 44, "I": 45, "K": 46, "M": 47, "O": 48, "S": 49, "U": 50,
-    "W": 51, "Y": 52, "[": 53, "]": 54, "a": 55, "c": 56, "e": 57,
-    "g": 58, "i": 59, "m": 60, "o": 61, "s": 62, "u": 63, "y": 64,
+_CHAR_SMI_SET: dict[str, int] = {
+    "(": 1,   ".": 2,   "0": 3,   "2": 4,   "4": 5,   "6": 6,   "8": 7,
+    "@": 8,   "B": 9,   "D": 10,  "F": 11,  "H": 12,  "L": 13,  "N": 14,
+    "P": 15,  "R": 16,  "T": 17,  "V": 18,  "Z": 19,  "\\": 20, "b": 21,
+    "d": 22,  "f": 23,  "h": 24,  "l": 25,  "n": 26,  "r": 27,  "t": 28,
+    "#": 29,  "%": 30,  ")": 31,  "+": 32,  "-": 33,  "/": 34,  "1": 35,
+    "3": 36,  "5": 37,  "7": 38,  "9": 39,  "=": 40,  "A": 41,  "C": 42,
+    "E": 43,  "G": 44,  "I": 45,  "K": 46,  "M": 47,  "O": 48,  "S": 49,
+    "U": 50,  "W": 51,  "Y": 52,  "[": 53,  "]": 54,  "a": 55,  "c": 56,
+    "e": 57,  "g": 58,  "i": 59,  "m": 60,  "o": 61,  "s": 62,  "u": 63,
+    "y": 64,
 }
 
-# Model configuration (must match training)
-MODEL_CONFIG = {
-    "embed_dim": 256,
-    "n_output": 1,
-    "num_features_pro": 33,  # 21 AA one-hot + 12 physicochemical
-    "num_features_mol": 78,  # Full atom features
-    "dropout": 0.2,
+MODEL_CONFIG: dict[str, Any] = {
+    "embed_dim":        256,
+    "n_output":         1,
+    "num_features_pro": 33,
+    "num_features_mol": 78,
+    "dropout":          0.2,
 }
 
-# Encoding limits
 MAX_SMILES_LEN = 100
-MAX_SEQ_LEN = 500
+MAX_SEQ_LEN    = 500
+
+# ============================================================================
+# Environment-variable driven configuration
+#
+# Both cache directories are now resolved from explicitly named env vars that
+# the platform sets via data_path_env in SubprocessEngineConfig.  This avoids
+# the previous pattern of probing relative to MMISA_KM_ROOT, which could
+# silently miss inside Docker.
+# ============================================================================
+
+def _resolve_cache_dirs() -> tuple[Path, Path | None]:
+    """
+    Return (runtime_cache_dir, precomputed_dir).
+
+    runtime_cache_dir  — writable directory for contact maps computed at
+                         inference time.  Platform sets this via
+                         MMISA_KM_CACHE_DIR (from DATA_PATHS["MMISA-KM"]).
+
+    precomputed_dir    — optional read-only directory of pre-computed maps
+                         shipped with model weights.  Platform sets this via
+                         MMISA_KM_PRECOMPUTED_DIR (from a second DATA_PATHS
+                         entry or a subdirectory of the weights dir).
+                         None when not configured.
+    """
+    # Primary: explicit platform-injected env vars (config_docker.py / config_local.py)
+    cache_root     = os.getenv("MMISA_KM_CACHE_DIR")
+    precomputed_ev = os.getenv("MMISA_KM_PRECOMPUTED_DIR")
+
+    if cache_root:
+        runtime_cache_dir = Path(cache_root).resolve()
+    else:
+        # Local dev fallback: resolve relative to the repository root.
+        mmisa_root = os.getenv("MMISA_KM_ROOT")
+        if mmisa_root:
+            runtime_cache_dir = Path(mmisa_root).resolve() / "contact_maps" / "cache"
+        else:
+            runtime_cache_dir = _THIS_DIR.parents[4] / "cache" / "mmisa_km"
+
+    runtime_cache_dir.mkdir(parents=True, exist_ok=True)
+
+    precomputed_dir: Path | None = None
+    if precomputed_ev:
+        candidate = Path(precomputed_ev).resolve()
+        if candidate.exists():
+            precomputed_dir = candidate
+        else:
+            logger.warning(
+                "MMISA_KM_PRECOMPUTED_DIR=%r does not exist — skipping precomputed maps",
+                precomputed_ev,
+            )
+    else:
+        # Local dev fallback: probe relative to MMISA_KM_ROOT only
+        mmisa_root = os.getenv("MMISA_KM_ROOT")
+        if mmisa_root:
+            candidate = Path(mmisa_root).resolve() / "contact_maps" / "precomputed"
+            if candidate.exists():
+                precomputed_dir = candidate
+
+    return runtime_cache_dir, precomputed_dir
+
+
+def _resolve_weights_path() -> Path:
+    """Locate trained_model.pt via env var or relative-to-script fallback."""
+    mmisa_root = os.getenv("MMISA_KM_ROOT")
+    if mmisa_root:
+        candidate = Path(mmisa_root).resolve() / "script" / "trained_model.pt"
+        if candidate.exists():
+            return candidate
+    return _THIS_DIR / "trained_model.pt"
+
+
+def _contact_map_source() -> str:
+    return os.getenv("MMISA_KM_CONTACT_MAP_SOURCE", "sequential")
+
+
+def _use_cache() -> bool:
+    return os.getenv("MMISA_KM_NO_CACHE", "0") != "1"
+
 
 # ============================================================================
 # Argument Parsing
@@ -104,47 +219,32 @@ MAX_SEQ_LEN = 500
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="MMISA-KM webKinPred batch adapter")
-    parser.add_argument("--input", required=True, help="Path to JSON input payload")
+    parser.add_argument("--input",  required=True, help="Path to JSON input payload")
     parser.add_argument("--output", required=True, help="Path to JSON output payload")
-    parser.add_argument(
-        "--contact-map-source",
-        default="sequential",
-        choices=["sequential", "esmfold", "alphafold", "template"],
-        help="Source for protein contact maps (default: sequential)"
-    )
-    parser.add_argument(
-        "--no-cache",
-        action="store_true",
-        help="Disable contact map caching"
-    )
     return parser.parse_args()
 
+
 # ============================================================================
-# Input Validation & Normalization
+# Input Validation & Normalisation
 # ============================================================================
 
 def _safe_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    """Validate and extract rows from input payload."""
     rows = payload.get("rows")
     if not isinstance(rows, list):
         raise RuntimeError("Input payload is malformed: 'rows' must be a list")
-    
-    out: list[dict[str, Any]] = []
     for i, row in enumerate(rows):
         if not isinstance(row, dict):
             raise RuntimeError(f"Input payload is malformed: row {i} is not an object")
-        out.append(row)
-    return out
+    return list(rows)
 
 
 def _normalise_substrate(raw: Any) -> str | None:
     """
-    Normalize substrate input to canonical SMILES.
-    
-    Supports:
-    - Single SMILES string
-    - List of SMILES (must contain exactly one valid entry)
-    - InChI strings (converted to SMILES via RDKit)
+    Normalise substrate input to a canonical SMILES string.
+
+    Accepts a single SMILES string, semicolon-separated string with one token,
+    a list with one token, or an InChI string (converted via RDKit).
+    Returns None for multi-substrate inputs or unparseable strings.
     """
     if isinstance(raw, list):
         tokens = [str(item).strip() for item in raw if str(item).strip()]
@@ -158,55 +258,46 @@ def _normalise_substrate(raw: Any) -> str | None:
         return None
 
     substrate = tokens[0]
-    
-    # Try parsing as SMILES first
+
     mol = Chem.MolFromSmiles(substrate)
     if mol is not None:
-        return Chem.MolToSmiles(mol)  # Canonicalize
-    
-    # Fallback: try InChI
-    mol = Chem.MolFromInchi(substrate)
-    if mol is None:
-        return None
-    
-    return Chem.MolToSmiles(mol)
+        return Chem.MolToSmiles(mol)
+
+    if _mol_from_inchi is not None:
+        mol = _mol_from_inchi(substrate)
+        if mol is not None:
+            return Chem.MolToSmiles(mol)
+
+    return None
+
 
 # ============================================================================
-# Graph Construction Functions (FIXED)
+# Graph Construction
 # ============================================================================
 
 def _build_mol_graph(smiles: str) -> Data | None:
-    """
-    Build PyG Data object for molecule with full 78-dim atom features.
-    
-    Uses atom_features() from data_process.py to ensure training/inference parity.
-    """
     mol = Chem.MolFromSmiles(smiles)
     if mol is None or mol.GetNumAtoms() == 0:
         return None
 
-    # Extract full 78-dim features for each atom
     x_rows: list[np.ndarray] = []
     for atom in mol.GetAtoms():
         feat = atom_features(atom)
-        # Apply L1 normalization to match original pipeline
         feat_sum = feat.sum()
-        if feat_sum > 1e-8:  # Avoid division by zero
+        if feat_sum > 1e-8:
             feat = feat / feat_sum
         x_rows.append(feat)
-    
+
     x = torch.tensor(np.stack(x_rows), dtype=torch.float32)
-    
-    # Edge construction: bidirectional bonds + self-loops
+
     edges: list[tuple[int, int]] = []
     for bond in mol.GetBonds():
         a, b = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
         edges.append((a, b))
         edges.append((b, a))
-    # Self-loops for message passing
     for i in range(mol.GetNumAtoms()):
         edges.append((i, i))
-    
+
     edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
     return Data(x=x, edge_index=edge_index)
 
@@ -216,45 +307,23 @@ def _build_pro_graph(
     contact_map_source: str = "sequential",
     cache: bool = True,
     cache_dir: Optional[Path] = None,
-    precomputed_dir: Optional[Path] = None
+    precomputed_dir: Optional[Path] = None,
 ) -> Data:
-    """
-    Build PyG Data object for protein with 33-dim residue features.
-    
-    Feature composition per residue:
-    - [0:21] : One-hot amino acid encoding
-    - [21:33]: Physicochemical properties (5 class flags + 7 normalized values)
-    
-    Edge construction:
-    - Preferred: Contact map from structure (Cβ < 8.0 Å)
-    - Fallback: Sequential adjacency (i ± 1, 2, 3) + self-loops
-    """
     seq = sequence[:MAX_SEQ_LEN].upper()
-    n_residues = len(seq)
-    
-    # Build node features: 21-dim one-hot + 12-dim properties = 33-dim
+
     features: list[np.ndarray] = []
     for aa in seq:
-        # 21-dim one-hot encoding
         onehot = np.zeros(21, dtype=np.float32)
-        aa_idx = _AA_TO_ID.get(aa, 21) - 1  # Map to 0-20, or 20 for unknown
-        aa_idx = max(0, min(20, aa_idx))
+        aa_idx = max(0, min(20, _AA_TO_ID.get(aa, 21) - 1))
         onehot[aa_idx] = 1.0
-        
-        # 12-dim physicochemical properties
         props = residue_features(aa)
-        
-        # Concatenate: 21 + 12 = 33
-        features.append(np.concatenate([onehot, props]))
-    
-    # Handle empty sequence edge case
+        features.append(np.concatenate([onehot, props]))  # 21 + 12 = 33
+
     if not features:
         features = [np.zeros(33, dtype=np.float32)]
-        n_residues = 1
-    
+
     x = torch.tensor(np.stack(features), dtype=torch.float32)
-    
-    # Edge construction via contact map
+
     contacts = generate_contact_map(
         sequence=seq,
         structure_source=contact_map_source,
@@ -262,153 +331,140 @@ def _build_pro_graph(
         cache_dir=cache_dir,
         precomputed_dir=precomputed_dir,
     )
-    
-    # Convert contact matrix to edge list
-    edges: list[tuple[int, int]] = []
-    n = min(len(features), contacts.shape[0])  # Safety clamp
+
+    n = min(len(features), contacts.shape[0])
+    edges: list[tuple[int, int]] = [
+        (i, j) for i in range(n) for j in range(n) if contacts[i, j] > 0.5
+    ]
+
+    existing_self_loops: set[int] = {e[0] for e in edges if e[0] == e[1]}
     for i in range(n):
-        for j in range(n):
-            if contacts[i, j] > 0.5:  # Threshold for binary contact
-                edges.append((i, j))
-    
-    # Ensure self-loops exist (important for GNN)
-    for i in range(n):
-        if not any(e[0] == i and e[1] == i for e in edges):
+        if i not in existing_self_loops:
             edges.append((i, i))
-    
+
     edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
     return Data(x=x, edge_index=edge_index)
+
 
 # ============================================================================
 # Model Loading
 # ============================================================================
 
-def _load_model(device: torch.device, weights_path: Optional[Path] = None) -> GNNNet:
-    """Load pretrained MMISA-KM model."""
-    if weights_path is None:
-        weights_path = _UPSTREAM_SCRIPT_DIR / "trained_model.pt"
-    
+def _load_model(device: torch.device) -> GNNNet:
+    weights_path = _resolve_weights_path()
     if not weights_path.exists():
-        raise RuntimeError(f"Missing MMISA-KM model weights at: {weights_path}")
-    
+        raise RuntimeError(
+            f"MMISA-KM model weights not found at: {weights_path}. "
+            "Set MMISA_KM_ROOT to the upstream directory containing "
+            "'script/trained_model.pt'."
+        )
     model = GNNNet(**MODEL_CONFIG)
     state = torch.load(weights_path, map_location=device, weights_only=True)
     model.load_state_dict(state)
-    model = model.to(device)
+    model.to(device)
     model.eval()
+    logger.info("Loaded MMISA-KM weights from %s on %s", weights_path, device)
     return model
 
+
 # ============================================================================
-# Batch Prediction Logic
+# Per-Row Inference with Progress Streaming
 # ============================================================================
 
-def _predict_rows(
-    rows: list[dict[str, Any]],
-    contact_map_source: str = "sequential",
-    cache: bool = True
-) -> tuple[list[Any], list[int]]:
+def _predict_rows(rows: list[dict[str, Any]]) -> tuple[list[Any], list[int]]:
     """
-    Process batch of input rows and generate predictions.
-    
-    Returns:
-        predictions: List of float Km values (mM) or None for invalid rows
-        invalid_indices: List of row indices that failed validation
+    Run MMISA-KM inference row-by-row with live progress streaming.
     """
-    predictions: list[Any] = [None] * len(rows)
+    n_total = len(rows)
+    predictions: list[Any] = [None] * n_total
     invalid_indices: list[int] = []
+    progress_emitted = -1
 
-    # Pre-filter and prepare valid inputs
-    valid_global_indices: list[int] = []
-    smiles_encoded: list[np.ndarray] = []
-    seq_encoded: list[np.ndarray] = []
-    mol_graphs: list[Data] = []
-    pro_graphs: list[Data] = []
+    def _emit_progress(done: int) -> None:
+        nonlocal progress_emitted
+        if done > progress_emitted:
+            progress_emitted = done
+            print(f"Progress: {done}/{n_total}", flush=True)
 
-    # Get cache directories from environment
-    cache_dir = None
-    precomputed_dir = None
-    mmisa_root = os.getenv("MMISA_KM_ROOT")
-    if mmisa_root:
-        root = Path(mmisa_root)
-        cache_dir = root / "contact_maps" / "cache"
-        precomputed_dir = root / "contact_maps" / "precomputed"
+    # Resolve both cache directories once per batch from explicit env vars.
+    cache_dir, precomputed_dir = _resolve_cache_dirs()
+    cmap_source = _contact_map_source()
+    use_cache   = _use_cache()
+
+    logger.info(
+        "MMISA-KM contact-map cache: runtime=%s, precomputed=%s, source=%s",
+        cache_dir, precomputed_dir, cmap_source,
+    )
+
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    logger.info("MMISA-KM inference device: %s", device)
+
+    try:
+        model = _load_model(device)
+    except Exception as exc:
+        logger.error("Model load failed — marking all rows invalid: %s", exc)
+        invalid_indices = list(range(n_total))
+        print(f"Progress: {n_total}/{n_total}", flush=True)
+        return predictions, invalid_indices
 
     for idx, row in enumerate(rows):
-        # Validate sequence
-        sequence = str(row.get("sequence", "")).strip().upper()
-        if not sequence or any(ch not in _VALID_AAS for ch in sequence):
-            invalid_indices.append(idx)
-            continue
+        try:
+            sequence = str(row.get("sequence", "")).strip().upper()
+            if not sequence:
+                raise ValueError("Empty sequence")
+            invalid_aas = [ch for ch in sequence if ch not in _VALID_AAS]
+            if invalid_aas:
+                raise ValueError(
+                    f"Sequence contains non-standard residues: {set(invalid_aas)}"
+                )
 
-        # Normalize substrate
-        substrate = _normalise_substrate(row.get("substrates", row.get("substrate")))
-        if not substrate:
-            invalid_indices.append(idx)
-            continue
+            substrate = _normalise_substrate(
+                row.get("substrates", row.get("substrate", ""))
+            )
+            if substrate is None:
+                raise ValueError("Substrate could not be parsed or is multi-substrate")
 
-        # Build molecule graph
-        mol_graph = _build_mol_graph(substrate)
-        if mol_graph is None:
-            invalid_indices.append(idx)
-            continue
+            mol_graph = _build_mol_graph(substrate)
+            if mol_graph is None:
+                raise ValueError(f"RDKit could not build graph for SMILES: {substrate!r}")
 
-        # All validations passed - queue for batch inference
-        valid_global_indices.append(idx)
-        smiles_encoded.append(encode_smiles(substrate, MAX_SMILES_LEN, _CHAR_SMI_SET))
-        seq_encoded.append(encode_sequence(sequence, MAX_SEQ_LEN, _AA_TO_ID))
-        mol_graphs.append(mol_graph)
-        pro_graphs.append(
-            _build_pro_graph(
+            smi_enc = encode_smiles(substrate, MAX_SMILES_LEN, _CHAR_SMI_SET)
+            seq_enc = encode_sequence(sequence, MAX_SEQ_LEN, _AA_TO_ID)
+
+            pro_graph = _build_pro_graph(
                 sequence,
-                contact_map_source=contact_map_source,
-                cache=cache,
+                contact_map_source=cmap_source,
+                cache=use_cache,
                 cache_dir=cache_dir,
                 precomputed_dir=precomputed_dir,
             )
-        )
 
-    # Handle case where no valid rows remain
-    if not valid_global_indices:
-        return predictions, sorted(set(invalid_indices))
+            smi_t = torch.tensor(smi_enc[np.newaxis], dtype=torch.long, device=device)
+            seq_t = torch.tensor(seq_enc[np.newaxis], dtype=torch.long, device=device)
+            mol_b = Batch.from_data_list([mol_graph]).to(device)
+            pro_b = Batch.from_data_list([pro_graph]).to(device)
 
-    ##ToDo : Cuda device designation (e.g. cuda:0 vs cuda:1)
-    
-    # Setup device and load model
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info(f"Running inference on {device}")
-    model = _load_model(device)
+            with torch.no_grad():
+                raw_output = model(smi_t, seq_t, mol_b, pro_b)
 
-    # Prepare batch tensors
-    smile_tensor = torch.tensor(
-        np.stack(smiles_encoded), dtype=torch.long, device=device
-    )
-    seq_tensor = torch.tensor(
-        np.stack(seq_encoded), dtype=torch.long, device=device
-    )
-    mol_batch = Batch.from_data_list(mol_graphs).to(device)
-    pro_batch = Batch.from_data_list(pro_graphs).to(device)
+            pred_log = float(raw_output.view(-1).detach().cpu()[0])
 
-    # Forward pass
-    with torch.no_grad():
-        # Model output: [batch, 1] with log10(Km)
-        raw_output = model(smile_tensor, seq_tensor, mol_batch, pro_batch)
-        raw_values = raw_output.view(-1).detach().cpu().tolist()
+            if math.isnan(pred_log) or math.isinf(pred_log):
+                raise ValueError(f"Non-finite model output ({pred_log}) at row {idx}")
 
-    # Post-process: convert log10(Km) -> Km (mM)
-    for local_idx, pred_log in enumerate(raw_values):
-        global_idx = valid_global_indices[local_idx]
-        
-        # Validate prediction
-        if pred_log is None or (isinstance(pred_log, float) and (math.isnan(pred_log) or math.isinf(pred_log))):
-            invalid_indices.append(global_idx)
-            predictions[global_idx] = None
-            continue
-        
-        # Transform: log10(Km) -> Km
-        km_value = float(10.0 ** float(pred_log))
-        predictions[global_idx] = km_value
+            predictions[idx] = float(10.0 ** pred_log)
+
+        except Exception as exc:
+            logger.warning("Row %d failed: %s", idx, exc)
+            invalid_indices.append(idx)
+            predictions[idx] = None
+
+        _emit_progress(idx + 1)
+
+    _emit_progress(n_total)
 
     return predictions, sorted(set(invalid_indices))
+
 
 # ============================================================================
 # Main Entry Point
@@ -416,46 +472,39 @@ def _predict_rows(
 
 def main() -> int:
     args = _parse_args()
-    input_path = Path(args.input)
+    input_path  = Path(args.input)
     output_path = Path(args.output)
 
-    # Load input payload
-    with input_path.open("r", encoding="utf-8") as f:
-        payload = json.load(f)
+    with input_path.open("r", encoding="utf-8") as fh:
+        payload = json.load(fh)
 
-    # Validate and extract rows
     rows = _safe_rows(payload)
-    logger.info(f"Processing {len(rows)} input rows")
+    logger.info("MMISA-KM: processing %d input rows", len(rows))
 
-    # Run predictions
-    predictions, invalid_indices = _predict_rows(
-        rows,
-        contact_map_source=args.contact_map_source,
-        cache=not args.no_cache,
-    )
+    predictions, invalid_indices = _predict_rows(rows)
 
-    # Prepare output
-    output_data = {
-        "predictions": predictions,
+    result = {
+        "predictions":    predictions,
         "invalid_indices": invalid_indices,
-        "metadata": {
-            "processed": len(rows),
-            "valid": len(rows) - len(invalid_indices),
-            "invalid": len(invalid_indices),
-        }
     }
 
-    # Write output
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as f:
-        json.dump(output_data, f, indent=2)
+    with output_path.open("w", encoding="utf-8") as fh:
+        json.dump(result, fh)
 
+    n_valid = len(rows) - len(invalid_indices)
     logger.info(
-        f"Complete: {len(rows) - len(invalid_indices)}/{len(rows)} valid predictions. "
-        f"Output written to {output_path}"
+        "MMISA-KM: complete — %d/%d valid predictions written to %s",
+        n_valid, len(rows), output_path,
     )
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception as exc:
+        print(f"[MMISA-KM] FATAL: {exc}", file=sys.stderr, flush=True)
+        raise

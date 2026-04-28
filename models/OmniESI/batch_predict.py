@@ -3,7 +3,57 @@
 OmniESI prediction wrapper for webKinPred generic subprocess engine.
 
 Contract:
-  python batch_predict.py --input <input.json> --output <output.json>
+    python batch_predict.py --input <input.json> --output <output.json>
+
+Input JSON:
+    {"rows": [{"sequence": "MKTAY...", "substrates": "CC(=O)O",
+               "seq_id": "sid_abc123"}, ...],
+     "params": {"kinetics_type": "KCAT"},   # or "KM"
+     "target": "kcat"}                       # alternative to params
+
+Output JSON:
+    {"predictions": [0.42, null, 1.3, ...], "invalid_indices": [1, ...]}
+
+    Predictions are in **linear kinetic units** (kcat: 1/s, Km: mM).
+    The OmniESI model outputs log10-scaled values; this script applies the
+    inverse transform (10**) after ensemble averaging in log space.
+
+Embedding cache
+---------------
+OmniESI requires full per-residue ESM2 token matrices — shape [seq_len, 1280]
+using esm2_t33_650M_UR50D.  This is architecturally distinct from CatPred's
+cache (which stores checkpoint-specific *pooled* vectors), so OmniESI uses its
+own embedding family:
+
+    <OMNIESI_EMBED_CACHE_DIR>/<seq_id>.pt   (cpu tensor, shape [seq_len, 1280])
+
+The cache directory is injected by the platform via:
+    OMNIESI_EMBED_CACHE_DIR   — path to media/sequence_info/omniesi_esm2/
+                                 (set by data_path_env in SubprocessEngineConfig)
+
+If a seq_id is present in the payload row, the shared cache is checked first.
+If the file is missing the embedding is computed on-the-fly (fail-open), which
+is the correct fallback when GPU precompute is unavailable.
+
+If no seq_id is present in the row (e.g. local dev), caching is skipped.
+
+Environment variables (all optional):
+    OMNIESI_EMBED_CACHE_DIR
+        Path to the shared omniesi_esm2 embedding cache directory.
+        Default: <repo>/media/sequence_info/omniesi_esm2
+    OmniESI_CACHE_DIR / OMNIESI_CACHE_DIR
+        Writable root for torch hub and ESM model weights download.
+        Default: <repo>/cache/omniesi
+    OmniESI_ROOT
+        OmniESI code root containing models.py, configs.py, utils.py,
+        and scripts/embedding.py.
+        Default: probed from script location, then /OmniESI.
+    OmniESI_ADDITIONAL_DATA
+        Path to the OmniESI_additional_data/additional_data/ directory
+        that contains results/CatPred_kcat and results/CatPred_km.
+        Default: probed relative to OmniESI_ROOT.
+    CUDA_VISIBLE_DEVICES
+        Standard mechanism to select a specific GPU on multi-GPU hosts.
 """
 
 from __future__ import annotations
@@ -29,11 +79,61 @@ from dgllife.utils import (
 )
 from tqdm import tqdm
 
+# ---------------------------------------------------------------------------
+# Logging — stderr keeps stdout clean for Progress: lines.
+# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    stream=sys.stderr,
+)
+logger = logging.getLogger(__name__)
+
+# ============================================================================
+# Cache directory resolution — runs at import time so TORCH_HOME / ESM_HOME
+# are set before any torch or ESM imports happen inside helper functions.
+# ============================================================================
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+def _resolve_weights_cache_dir() -> Path:
+    """Writable root for torch hub / ESM model weight downloads."""
+    cache_root = os.getenv("OmniESI_CACHE_DIR") or os.getenv("OMNIESI_CACHE_DIR")
+    if cache_root:
+        return Path(cache_root).resolve()
+    return (_REPO_ROOT / "cache" / "omniesi").resolve()
+
+
+def _resolve_embed_cache_dir() -> Path:
+    """
+    Shared per-residue ESM2 embedding cache.
+
+    Injected by the platform via OMNIESI_EMBED_CACHE_DIR (set through
+    data_path_env in SubprocessEngineConfig).  Falls back to a local
+    subdirectory so the script remains runnable standalone.
+    """
+    env = os.getenv("OMNIESI_EMBED_CACHE_DIR")
+    if env:
+        return Path(env).resolve()
+    # Fallback: local cache alongside model weights (dev / standalone use)
+    return _resolve_weights_cache_dir() / "esm_embeddings"
+
+
+OMNIESI_WEIGHTS_CACHE_DIR = _resolve_weights_cache_dir()
+OMNIESI_EMBED_CACHE_DIR   = _resolve_embed_cache_dir()
+OMNIESI_EMBED_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+# Must be set before torch / ESM are imported by any function below.
+os.environ.setdefault("TORCH_HOME", str(OMNIESI_WEIGHTS_CACHE_DIR / "torch"))
+os.environ.setdefault("ESM_HOME",   str(OMNIESI_WEIGHTS_CACHE_DIR / "esm"))
+
+# ============================================================================
+# Code-root resolution
+# ============================================================================
 
 def _resolve_code_root() -> Path:
-    """Resolve OmniESI code root from env or repository layout."""
     script_dir = Path(__file__).resolve().parent
-    env_root = Path(os.environ.get("OmniESI_ROOT", "/OmniESI")).resolve()
+    env_root   = Path(os.environ.get("OmniESI_ROOT", "/OmniESI")).resolve()
     candidates = [
         script_dir / "code",
         script_dir,
@@ -43,7 +143,6 @@ def _resolve_code_root() -> Path:
     for candidate in candidates:
         if (candidate / "configs.py").exists() and (candidate / "models.py").exists():
             return candidate
-    # Keep compatibility with container layouts where /OmniESI itself is code root.
     return env_root
 
 
@@ -51,36 +150,134 @@ ROOT_DIR = _resolve_code_root()
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from models import OmniESI  # noqa: E402
-from utils import set_seed  # noqa: E402
-from configs import get_cfg_defaults  # noqa: E402
-from scripts.embedding import ESM_model  # noqa: E402
+logger.debug("OmniESI code root resolved to: %s", ROOT_DIR)
 
-logger = logging.getLogger(__name__)
-
-##ToDo : Cuda device designation (e.g. cuda:0 vs cuda:1)
+# ============================================================================
+# Device selection
+# ============================================================================
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+# ============================================================================
+# Constants
+# ============================================================================
+
 SEED_LIST = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90]
 
-# Add at module level:
+# ============================================================================
+# Lazy module loader / import guard
+# ============================================================================
+
+def _ensure_omniesi_code_importable() -> None:
+    try:
+        import models    as _m  # noqa: F401
+        import utils     as _u  # noqa: F401
+        import configs   as _c  # noqa: F401
+    except ImportError as exc:
+        raise RuntimeError(
+            f"OmniESI source modules (models.py / utils.py / configs.py) are not "
+            f"importable from ROOT_DIR='{ROOT_DIR}'. "
+            f"Set the OmniESI_ROOT environment variable to the directory that "
+            f"contains those files. Original ImportError: {exc}"
+        ) from exc
+
+    try:
+        import scripts.embedding as _e  # noqa: F401
+    except ImportError as exc:
+        raise RuntimeError(
+            f"OmniESI scripts/embedding.py is not importable from ROOT_DIR='{ROOT_DIR}'. "
+            f"Original ImportError: {exc}"
+        ) from exc
+
+
+# ============================================================================
+# Shared embedding cache I/O
+#
+# Cache key: seq_id  (platform-assigned stable identifier, from seqmap tool).
+# File path: OMNIESI_EMBED_CACHE_DIR / <seq_id>.pt
+# Stored tensor shape: [seq_len, 1280]  (cpu, float32)
+#
+# If seq_id is absent (local / test usage), caching is skipped entirely and
+# the embedding is computed fresh each time — the fail-open path.
+# ============================================================================
+
+def _embed_cache_path(seq_id: str) -> Path:
+    return OMNIESI_EMBED_CACHE_DIR / f"{seq_id}.pt"
+
+
+def _load_shared_embedding(seq_id: str | None) -> torch.Tensor | None:
+    """
+    Load a cached per-residue ESM2 embedding by seq_id.
+
+    Returns tensor of shape [seq_len, 1280] on cpu, or None on cache miss /
+    absent seq_id.
+    """
+    if not seq_id:
+        return None
+    cache_path = _embed_cache_path(seq_id)
+    if not cache_path.exists():
+        return None
+    try:
+        tensor = torch.load(cache_path, map_location="cpu", weights_only=True)
+        # Normalise: stored shape may be [1, seq_len, 1280] (from ESM batch dim)
+        # or [seq_len, 1280].  OmniESI prepare_inputs expects [1, seq_len, 1280].
+        if tensor.dim() == 2:
+            tensor = tensor.unsqueeze(0)
+        return tensor
+    except Exception as exc:
+        logger.warning("Embedding cache read failed for seq_id=%r: %s", seq_id, exc)
+        return None
+
+
+def _save_shared_embedding(seq_id: str | None, embedding: torch.Tensor) -> None:
+    """
+    Persist a per-residue ESM2 embedding to the shared cache.
+
+    Stores shape [seq_len, 1280] (strips batch dim if present) so the file
+    is as compact as possible and GPU-step writers also use this convention.
+    """
+    if not seq_id:
+        return
+    cache_path = _embed_cache_path(seq_id)
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        # Strip batch dimension before persisting.
+        tensor_to_save = embedding.cpu()
+        if tensor_to_save.dim() == 3 and tensor_to_save.shape[0] == 1:
+            tensor_to_save = tensor_to_save.squeeze(0)
+        torch.save(tensor_to_save, cache_path)
+    except Exception as exc:
+        logger.warning("Embedding cache write failed for seq_id=%r: %s", seq_id, exc)
+
+
+# ============================================================================
+# ESM model — in-process singleton, keyed by device
+# ============================================================================
+
 _ESM_MODEL_CACHE: dict[torch.device, Any] = {}
 
-def _get_esm_model(device: torch.device) -> Any:
-    """Lazy-load ESM model with device-specific caching."""
-    if device not in _ESM_MODEL_CACHE:
-        from scripts.embedding import ESM_model
+
+def _get_esm_model(dev: torch.device) -> Any:
+    """Lazy-load and cache the ESM embedding model for the given device."""
+    if dev not in _ESM_MODEL_CACHE:
+        from scripts.embedding import ESM_model  # lazy — cached in sys.modules
         model = ESM_model()
-        model.device = device
+        model.device = dev
         model.eval()
-        _ESM_MODEL_CACHE[device] = model
-        logger.info(f"Loaded ESM model on {device}")
-    return _ESM_MODEL_CACHE[device]
+        _ESM_MODEL_CACHE[dev] = model
+        logger.info("Loaded ESM model on %s", dev)
+    return _ESM_MODEL_CACHE[dev]
+
+
+# ============================================================================
+# Additional data directory resolution
+# ============================================================================
 
 def _additional_data_dir() -> Path:
     env_value = os.environ.get("OmniESI_ADDITIONAL_DATA")
     if env_value:
         return Path(env_value).resolve()
+
     candidates = [
         ROOT_DIR / "OmniESI_additional_data" / "additional_data",
         ROOT_DIR.parent / "OmniESI_additional_data" / "additional_data",
@@ -88,20 +285,22 @@ def _additional_data_dir() -> Path:
     for candidate in candidates:
         if candidate.exists():
             return candidate.resolve()
+
     return candidates[0].resolve()
 
+
+# ============================================================================
+# Input helpers
+# ============================================================================
 
 def _safe_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
     rows = payload.get("rows")
     if not isinstance(rows, list):
         raise RuntimeError("Input payload is malformed: 'rows' must be a list")
-
-    out: list[dict[str, Any]] = []
     for i, row in enumerate(rows):
         if not isinstance(row, dict):
             raise RuntimeError(f"Input payload is malformed: row {i} is not an object")
-        out.append(row)
-    return out
+    return list(rows)
 
 
 def _substrate_to_smiles(raw: Any) -> str | None:
@@ -120,7 +319,7 @@ def _substrate_to_smiles(raw: Any) -> str | None:
 
 def _kinetics_type_from_payload(payload: dict[str, Any]) -> str:
     params = payload.get("params") or {}
-    ktype = str(params.get("kinetics_type", "")).upper().strip()
+    ktype  = str(params.get("kinetics_type", "")).upper().strip()
     if ktype in {"KCAT", "KM"}:
         return ktype
 
@@ -130,59 +329,122 @@ def _kinetics_type_from_payload(payload: dict[str, Any]) -> str:
     if target == "Km":
         return "KM"
 
-    raise RuntimeError("Missing kinetics type and unknown target in input payload.")
+    raise RuntimeError(
+        "Cannot determine kinetics type: set params.kinetics_type to 'KCAT' or 'KM', "
+        "or set target to 'kcat' or 'Km'."
+    )
 
 
-def prepare_inputs(smiles: str, protein_seq: str, embedder: ESM_model):
+# ============================================================================
+# Input preparation for a single (smiles, sequence) pair
+# ============================================================================
+
+def prepare_inputs(
+    smiles: str,
+    protein_seq: str,
+    embedder: Any,            # ESM_model instance
+    seq_id: str | None,       # shared cache key; None = skip caching
+) -> tuple[Any, torch.Tensor, torch.Tensor, torch.Tensor] | None:
+    """
+    Build DGL molecular graph + ESM per-residue embedding for one sample.
+
+    Embedding lookup order:
+        1. Shared cache file at OMNIESI_EMBED_CACHE_DIR/<seq_id>.pt   (hit → skip GPU)
+        2. On-the-fly ESM inference with the in-process model singleton
+           → result written to shared cache for future jobs.
+
+    Returns (v_d, v_p, v_d_mask, v_p_mask) on success, None on failure.
+    """
     try:
         atom_featurizer = CanonicalAtomFeaturizer()
         bond_featurizer = CanonicalBondFeaturizer(self_loop=True)
         fc = partial(smiles_to_bigraph, add_self_loop=True)
+
         v_d = fc(
             smiles=smiles,
             node_featurizer=atom_featurizer,
             edge_featurizer=bond_featurizer,
         )
-
         actual_node_feats = v_d.ndata.pop("h")
-        num_actual_nodes = actual_node_feats.shape[0]
-        num_virtual_nodes = 0
-        virtual_node_bit = torch.zeros([num_actual_nodes, 1])
-        actual_node_feats = torch.cat((actual_node_feats, virtual_node_bit), 1)
-        v_d.ndata["h"] = actual_node_feats
+        num_actual_nodes  = actual_node_feats.shape[0]
 
-        virtual_node_feat = torch.cat(
-            (torch.zeros(num_virtual_nodes, 74), torch.ones(num_virtual_nodes, 1)),
-            1,
-        )
-        v_d.add_nodes(num_virtual_nodes, {"h": virtual_node_feat})
+        virtual_bit = torch.zeros([num_actual_nodes, 1])
+        v_d.ndata["h"] = torch.cat((actual_node_feats, virtual_bit), dim=1)
         v_d = v_d.add_self_loop()
         v_d = dgl.batch([v_d])
         v_d_mask = torch.zeros(num_actual_nodes, dtype=torch.bool).unsqueeze(0)
 
-        v_p = embedder([protein_seq])
-        v_p = v_p[:, 1 : len(protein_seq) + 1, :]
+        # ── Embedding: shared cache first, then on-the-fly ────────────────────
+        v_p = _load_shared_embedding(seq_id)
+        if v_p is None:
+            # Cache miss (or no seq_id) — compute via ESM and persist.
+            v_p = embedder([protein_seq])
+            v_p = v_p[:, 1 : len(protein_seq) + 1, :]   # strip BOS token
+            _save_shared_embedding(seq_id, v_p)
+            logger.debug(
+                "Embedding computed on-the-fly for seq_id=%r (len=%d)",
+                seq_id, len(protein_seq),
+            )
+        else:
+            logger.debug("Embedding loaded from shared cache for seq_id=%r", seq_id)
+            # Restore batch dim expected by model: [1, seq_len, 1280]
+            if v_p.dim() == 2:
+                v_p = v_p.unsqueeze(0)
+
         v_p_mask = torch.zeros(v_p.shape[1], dtype=torch.bool).unsqueeze(0)
 
         return v_d, v_p, v_d_mask, v_p_mask
-    except Exception:
+
+    except Exception as exc:
+        logger.debug("prepare_inputs failed for smiles=%r: %s", smiles[:40], exc)
         return None
 
 
-def _discover_available_seeds(weight_folder: Path) -> list[int]:
-    available: list[int] = []
-    for seed in SEED_LIST:
-        weight_path = weight_folder / f"OmniESI_ensemble_{seed}" / "best_model_epoch.pth"
-        if weight_path.exists():
-            available.append(seed)
-    return available
+# ============================================================================
+# Checkpoint discovery
+# ============================================================================
 
+def _discover_available_seeds(weight_folder: Path) -> list[int]:
+    return [
+        seed for seed in SEED_LIST
+        if (weight_folder / f"OmniESI_ensemble_{seed}" / "best_model_epoch.pth").exists()
+    ]
+
+
+# ============================================================================
+# Ensemble inference with progress streaming
+# ============================================================================
 
 def predict_kinetic_parameter_ensemble(
     valid_df: pd.DataFrame,
     kinetics_type: str,
-    esm_model: ESM_model,
+    esm_model: Any,
+    n_total_rows: int,
+    first_valid_global_idx: int,
+    valid_global_indices: list[int],
 ) -> list[float | None]:
+    """
+    Run OmniESI ensemble inference over valid_df rows.
+
+    Loop order: row-outer, seed-inner.
+    All checkpoints are loaded once upfront and held in memory for the
+    duration of the batch.  Progress is emitted once per completed row
+    (after all seeds have run for that row), matching the per-row progress
+    semantics of other webKinPred subprocess engines.
+
+    Log-space averaging / inverse transform
+    ----------------------------------------
+    OmniESI is built on the CatPred backbone and trains on log10-scaled
+    kinetic targets.  Correct ensemble strategy:
+        1. Collect raw log10 outputs from each seed.
+        2. Average in log space  (= geometric mean in linear space).
+        3. Apply inverse transform: 10 ** mean_log → linear units
+           (kcat: 1/s, Km: mM).
+    """
+    from models import OmniESI            # lazy
+    from utils import set_seed            # lazy
+    from configs import get_cfg_defaults  # lazy
+
     cfg = get_cfg_defaults()
     cfg.merge_from_file(str(ROOT_DIR / "configs" / "model" / "OmniESI_ensemble.yaml"))
     set_seed(42)
@@ -194,144 +456,187 @@ def predict_kinetic_parameter_ensemble(
     elif kinetics_type == "KM":
         weight_folder = additional_data_dir / "results" / "CatPred_km" / "fold_OmniESI"
     else:
-        raise RuntimeError(f"Unsupported kinetics type: {kinetics_type}")
+        raise RuntimeError(f"Unsupported kinetics type: {kinetics_type!r}")
 
     available_seeds = _discover_available_seeds(weight_folder)
     if not available_seeds:
-        raise RuntimeError(f"No OmniESI checkpoints found under: {weight_folder}")
+        raise RuntimeError(
+            f"No OmniESI checkpoints found under: {weight_folder}. "
+            "Set OmniESI_ADDITIONAL_DATA to the correct additional_data/ directory."
+        )
 
-    n_rows = len(valid_df)
-    total_ops = n_rows * len(available_seeds)
-    ops_done = 0
+    n_rows        = len(valid_df)
     progress_done = -1
+    progress_base = first_valid_global_idx
 
-    predictions_per_seed: list[list[float | None]] = []
+    def _emit(local_row_done: int) -> None:
+        nonlocal progress_done
+        global_done = progress_base + local_row_done
+        if global_done > progress_done:
+            progress_done = global_done
+            print(f"Progress: {global_done}/{n_total_rows}", flush=True)
 
+    # ── Load all checkpoints once upfront ────────────────────────────────────
+    # Keeps each model in GPU memory for the full batch rather than reloading
+    # per row.  With 10 seeds of OmniESI the combined VRAM cost is manageable;
+    # if memory is tight, reduce to a smaller seed subset before calling here.
+    logger.info("Loading %d OmniESI checkpoints onto %s", len(available_seeds), device)
+    loaded_models: list[Any] = []
     for seed in available_seeds:
-        model = OmniESI(**cfg)
+        m = OmniESI(**cfg)
         weight_path = weight_folder / f"OmniESI_ensemble_{seed}" / "best_model_epoch.pth"
-        model.load_state_dict(torch.load(str(weight_path), map_location=device))
-        model.to(device)
-        model.eval()
+        try:
+            state = torch.load(str(weight_path), map_location=device, weights_only=True)
+        except TypeError:
+            state = torch.load(str(weight_path), map_location=device)
+        m.load_state_dict(state)
+        m.to(device)
+        m.eval()
+        loaded_models.append(m)
+    torch.backends.cudnn.benchmark = True
+    logger.info("All checkpoints loaded")
 
-        seed_predictions: list[float | None] = []
-        torch.backends.cudnn.benchmark = True
-
-        with torch.no_grad():
-            iterator = tqdm(valid_df.iterrows(), total=n_rows, desc=f"Seed {seed}", leave=False)
-            for _, row in iterator:
-                smiles = row["smiles"]
-                protein_seq = row["sequence"]
-
-                result = prepare_inputs(smiles, protein_seq, esm_model)
-                if result is None:
-                    seed_predictions.append(None)
-                else:
-                    v_d, v_p, v_d_mask, v_p_mask = result
-                    v_d = v_d.to(device)
-                    v_p = v_p.to(device)
-                    v_d_mask = v_d_mask.to(device)
-                    v_p_mask = v_p_mask.to(device)
-                    try:
-                        output = model(v_d, v_p, v_d_mask, v_p_mask)
-                        y = output[-1]
-                        y_value = float(y.cpu().numpy().flatten()[0])
-                        seed_predictions.append(y_value)
-                    except Exception:
-                        seed_predictions.append(None)
-
-                ops_done += 1
-                done = int((ops_done / max(total_ops, 1)) * n_rows)
-                if done > progress_done:
-                    progress_done = done
-                    print(f"Progress: {done}/{n_rows}", flush=True)
-
-        predictions_per_seed.append(seed_predictions)
-
+    # ── Row-outer, seed-inner inference ──────────────────────────────────────
     ensemble_predictions: list[float | None] = []
-    for i in range(n_rows):
-        sample_predictions = [
-            seed_preds[i] for seed_preds in predictions_per_seed if seed_preds[i] is not None
-        ]
-        if sample_predictions:
-            ensemble_predictions.append(float(np.mean(sample_predictions)))
-        else:
-            ensemble_predictions.append(None)
 
-    if progress_done < n_rows:
-        print(f"Progress: {n_rows}/{n_rows}", flush=True)
+    rows_iter = tqdm(valid_df.iterrows(), total=n_rows, desc="OmniESI", file=sys.stderr)
+    with torch.no_grad():
+        for local_idx, (_, row) in enumerate(rows_iter):
+            # Build inputs once per row (embedding is shared across seeds)
+            result = prepare_inputs(
+                row["smiles"],
+                row["sequence"],
+                esm_model,
+                row.get("seq_id"),
+            )
 
+            if result is None:
+                ensemble_predictions.append(None)
+                _emit(local_idx + 1)
+                continue
+
+            v_d, v_p, v_d_mask, v_p_mask = result
+            v_d      = v_d.to(device)
+            v_p      = v_p.to(device)
+            v_d_mask = v_d_mask.to(device)
+            v_p_mask = v_p_mask.to(device)
+
+            log_values: list[float] = []
+            for seed_idx, m in enumerate(loaded_models):
+                try:
+                    output = m(v_d, v_p, v_d_mask, v_p_mask)
+                    log_values.append(float(output[-1].cpu().numpy().flatten()[0]))
+                except Exception as exc:
+                    logger.warning(
+                        "Row %d seed %d inference failed: %s",
+                        local_idx, available_seeds[seed_idx], exc,
+                    )
+
+            if log_values:
+                ensemble_predictions.append(float(10.0 ** float(np.mean(log_values))))
+            else:
+                ensemble_predictions.append(None)
+
+            # Emit once per completed row — matches per-row progress semantics
+            _emit(local_idx + 1)
+
+    _emit(n_rows)
     return ensemble_predictions
 
 
+# ============================================================================
+# Top-level payload handler
+# ============================================================================
+
 def run_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    rows = _safe_rows(payload)
+    """
+    Validate input, run OmniESI ensemble inference, return output dict.
+    """
+    _ensure_omniesi_code_importable()
+
+    rows          = _safe_rows(payload)
     kinetics_type = _kinetics_type_from_payload(payload)
 
-    predictions: list[float | None] = [None] * len(rows)
-    invalid_indices: list[int] = []
-    valid_indices: list[int] = []
-    valid_rows: list[dict[str, str]] = []
+    n_total         = len(rows)
+    predictions     : list[float | None] = [None] * n_total
+    invalid_indices : list[int] = []
+    valid_indices   : list[int] = []
+    valid_rows      : list[dict[str, Any]] = []
 
     for idx, row in enumerate(rows):
-        seq = str(row.get("sequence", "")).strip()
+        seq    = str(row.get("sequence", "")).strip()
         smiles = _substrate_to_smiles(row.get("substrates", row.get("substrate", "")))
         if not seq or smiles is None:
             invalid_indices.append(idx)
-            continue
-        valid_indices.append(idx)
-        valid_rows.append({"sequence": seq, "smiles": smiles})
+        else:
+            valid_indices.append(idx)
+            valid_rows.append({
+                "sequence": seq,
+                "smiles":   smiles,
+                "seq_id":   row.get("seq_id"),   # None when absent — caching skipped
+            })
 
     if not valid_indices:
-        total = len(rows)
-        for i in range(total):
-            print(f"Progress: {i + 1}/{total}", flush=True)
-        return {"predictions": predictions, "invalid_indices": sorted(set(invalid_indices))}
+        for i in range(n_total):
+            print(f"Progress: {i + 1}/{n_total}", flush=True)
+        return {
+            "predictions":     predictions,
+            "invalid_indices": sorted(invalid_indices),
+        }
 
     try:
         if device.type == "cuda":
             torch.cuda.empty_cache()
         esm_model = _get_esm_model(device)
     except Exception as exc:
-        raise RuntimeError(f"Failed to initialize ESM model: {exc}") from exc
+        raise RuntimeError(f"Failed to initialise ESM model: {exc}") from exc
 
-    valid_df = pd.DataFrame(valid_rows)
+    valid_df    = pd.DataFrame(valid_rows)
     valid_preds = predict_kinetic_parameter_ensemble(
-        valid_df=valid_df,
-        kinetics_type=kinetics_type,
-        esm_model=esm_model,
+        valid_df               = valid_df,
+        kinetics_type          = kinetics_type,
+        esm_model              = esm_model,
+        n_total_rows           = n_total,
+        first_valid_global_idx = valid_indices[0],
+        valid_global_indices   = valid_indices,
     )
 
     for local_idx, pred in enumerate(valid_preds):
         global_idx = valid_indices[local_idx]
+        predictions[global_idx] = pred
         if pred is None:
             invalid_indices.append(global_idx)
-        predictions[global_idx] = pred
+
+    print(f"Progress: {n_total}/{n_total}", flush=True)
 
     return {
-        "predictions": predictions,
+        "predictions":     predictions,
         "invalid_indices": sorted(set(invalid_indices)),
     }
 
 
+# ============================================================================
+# CLI entry point
+# ============================================================================
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="OmniESI webKinPred batch adapter")
-    parser.add_argument("--input", required=True, help="Input JSON path")
+    parser.add_argument("--input",  required=True, help="Input JSON path")
     parser.add_argument("--output", required=True, help="Output JSON path")
     args = parser.parse_args()
 
-    with open(args.input, "r", encoding="utf-8") as f:
-        payload = json.load(f)
+    with open(args.input, "r", encoding="utf-8") as fh:
+        payload = json.load(fh)
 
     result = run_from_payload(payload)
 
-    with open(args.output, "w", encoding="utf-8") as f:
-        json.dump(result, f)
+    with open(args.output, "w", encoding="utf-8") as fh:
+        json.dump(result, fh)
 
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as exc:
-        print(f"[OmniESI] ERROR: {exc}", file=sys.stderr, flush=True)
+        print(f"[OmniESI] FATAL: {exc}", file=sys.stderr, flush=True)
         raise

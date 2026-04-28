@@ -33,7 +33,9 @@ descriptor = MethodDescriptor(
         python_path_key="OmniESI",
         script_key="OmniESI",
         data_path_env={
-            "OmniESI_ROOT": "OmniESI",
+            "OMNIESI_EMBED_CACHE_DIR": "OmniESI-embed",
+            "OmniESI_CACHE_DIR":       "OmniESI-weights",
+            "OmniESI_ADDITIONAL_DATA": "OmniESI-additional",
         },
     ),
     embeddings_used=["esm2"],

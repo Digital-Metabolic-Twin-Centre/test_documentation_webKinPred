@@ -31,7 +31,7 @@ descriptor = MethodDescriptor(
         python_path_key="MMISA-KM",
         script_key="MMISA-KM",
         data_path_env={
-            "MMISA_KM_ROOT": "MMISAKM",
+            "MMISA_KM_CACHE_DIR": "MMISA-KM_cache",
         },
     ),
     embeddings_used=[],
