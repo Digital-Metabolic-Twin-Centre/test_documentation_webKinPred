@@ -23,7 +23,7 @@ _DATA_PATH_REL = {
     "MMISA-KM": "models/MMISA-KM",
     "MMISA-KM_cache": "cache/mmisa_km",
     "OmniESI": "models/OmniESI",
-    "OmniESI-additional": "models/OmniESI/upstream/OmniESI_additional_data/additional_data",
+    "OmniESI-additional": "models/OmniESI/code/OmniESI_additional_data/additional_data",
     "OmniESI-embed": "media/sequence_info/omniesi_esm2",
     "OmniESI-weights": "cache/omniesi",
     "media": "media",
