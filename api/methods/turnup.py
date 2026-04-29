@@ -25,8 +25,8 @@ descriptor = MethodDescriptor(
     more_info="Recommended for natural reactions of wild-type enzymes.",
     # ── Capabilities ──────────────────────────────────────────────────────────
     supports=["kcat"],
-    # TurNup requires "Substrates" and "Products" columns containing
-    # semicolon-separated SMILES or InChI strings.
+    # TurNup uses the full-reaction CSV format: "Substrates" and "Products"
+    # columns containing semicolon-separated SMILES or InChI strings.
     input_format="multi",
     output_cols={"kcat": "kcat (1/s)"},
     # ── Sequence length ───────────────────────────────────────────────────────

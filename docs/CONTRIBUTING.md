@@ -20,7 +20,7 @@ descriptor = MethodDescriptor(
     repo_url="https://github.com/...",
 
     supports=["kcat"],                 # e.g. ["kcat"], ["Km"], ["kcat/Km"], or combinations
-    input_format="single",             # "single", "multi", or "full reaction" ("full reaction" uses "multi" internally)
+    input_format="single",             # backend contract: "single" or "multi"
     output_cols={"kcat": "kcat (1/s)"},
     max_seq_len=1024,
 
@@ -38,9 +38,12 @@ descriptor = MethodDescriptor(
 ### What these fields mean
 
 - `supports`: which targets your method predicts.
-- `input_format`: CSV shape expected from users.
-  Use `single`, `multi`, or `full reaction` in user-facing docs.
-  In descriptors, `full reaction` is represented by `multi` (`Substrates` + `Products`).
+- `input_format`: backend CSV column contract expected by the method.
+  Descriptors use `single` for the `Substrate` column contract and `multi` for
+  the full-reaction `Substrates` + `Products` contract.
+  User-facing docs should describe the three CSV formats: `single`, `multi`
+  (dot-joined co-substrates in `Substrate`), and `full reaction`
+  (`Substrates` + `Products`).
 - `col_to_kwarg`: maps CSV columns to kwargs passed into your method runtime.
 - `target_kwargs`: per-target switches (for shared kcat/Km scripts).
 - `subprocess` or `pred_func`: set exactly one.

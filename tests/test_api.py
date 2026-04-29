@@ -98,8 +98,8 @@ CATPRED_DOTJOIN_SUBSTRATE_CSV = textwrap.dedent("""\
     MCTAITLNGNSNYFGRNLDLDFSYGEEVIITPAEYEFKFRKEKAIKNHKSLIGVGIVANDYPLYFDAINEDGLGMAGLNFPGNAYYSDALENDKDNITPFEFIPWILGQCSDVNEARNLVEKINLINLSFSEQLPLAGLHWLIADREKSIVVEVTKSGVHIYDNPIGILTNNPEFNYQMYNLNKYRNLSISTPQNTFSDSVDLKVDGTGFGGIGLPGDVSPESRFVRATFSKLNSSKGMTVEEDITQFFHILGTVEQIKGVNKTESGKEEYTVYSNCYDLDNKTLYYTTYENRQIVAVTLNKDKDGNRLVTYPFERKQIINKLN,OCC(O)CO.CCO
 """)
 
-# Multi-substrate CSV (for TurNup only — uses Substrates + Products columns)
-MULTI_SUBSTRATE_CSV = textwrap.dedent("""\
+# Full-reaction CSV (for TurNup only — uses Substrates + Products columns)
+FULL_REACTION_CSV = textwrap.dedent("""\
     Protein Sequence,Substrates,Products
     MSTAIVTNVKHFGGMGSALRLSEAGHTVACHDESFKQKDELEAFAETYPQLKPMSEQEPAELIEAVTSAYGQVDVLVSNDIFAPEFQPIDKYAVEDYRGAVEALQIRPFALVNAVASQMKKRKSGHIIFITSATPFGPWKELSTYTSARAGACTLANALSKELGEYNIPVFAIGPNYLHSEDSPYFYPTEPWKTNPEHVAHVKKVTALQRLGTQKELGELVAFLASGSCDYLTGQVFWLAGGFPMIERWPGMPE,CC(=O)O;O,CC(O)=O;[H+]
     MEMLEEHRCFEGWQQRWRHDSSTLNCPMTFSIFLPPPRDHTPPPVLYWLSGLTCNDENFTTKAGAQRVAAELGIVLVMPDTSPRGEKVANDDGYDLGQGAGFYLNATQPPWATHYRMYDYLRDELPALVQSQFNVSDRCAISGHSMGGHGALIMALKNPGKYTSVSAFAPIVNPCSVPWGIKAFSSYLGEDKNAWLEWDSCALMYASNAQDAIPTLIAQGDNDQFLADQLQPAVLAEAARQKAWPMTLRIQPGYDHSYYFIASFIEDHLRFHAQYLLK,C1CCCCC1;O,OC1CCCCC1;[H+]
@@ -203,13 +203,13 @@ def choose_submit_csv(
     """
     Choose the CSV fixture that matches method-specific input expectations.
 
-    - TurNup (kcat) uses full-reaction multi-column CSV.
+    - TurNup (kcat) uses full-reaction CSV.
     - CatPred tests use dot-joined values in the single "Substrate" column.
     - Other methods use the standard single-substrate fixture.
     """
     if prediction_type == "kcat":
         if kcat_method == "TurNup":
-            return MULTI_SUBSTRATE_CSV
+            return FULL_REACTION_CSV
         if kcat_method == "CatPred":
             return CATPRED_DOTJOIN_SUBSTRATE_CSV
     elif prediction_type == "Km":
@@ -528,7 +528,7 @@ def test_submit_kcat_similarity_toggle_off(base: str, headers: dict, methods: se
 def test_submit_json_body(base: str, headers: dict, methods: set) -> dict | None:
     kcat_method = next(
         (m for m in KCAT_METHOD_IDS if m.lower() in methods and m != "TurNup"), None
-    )  # TurNup needs multi-substrate format; pick any other kcat method
+    )  # TurNup needs full-reaction format; pick any other kcat method
     if kcat_method is None:
         print("\n  (skipping JSON body submit test — no non-TurNup kcat method selected)")
         return None

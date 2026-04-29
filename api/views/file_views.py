@@ -25,12 +25,12 @@ def detect_csv_format(request):
     errors = []
     required_cols = {"Protein Sequence"}
     has_substrate = "Substrate" in df.columns
-    has_substrates_products = "Substrates" in df.columns and "Products" in df.columns
+    has_full_reaction_cols = "Substrates" in df.columns and "Products" in df.columns
 
     if not required_cols.issubset(df.columns):
         errors.append("Missing required column: 'Protein Sequence'")
 
-    if not has_substrate and not has_substrates_products:
+    if not has_substrate and not has_full_reaction_cols:
         errors.append(
             "Missing substrate information: expected either 'Substrate' or both 'Substrates' and 'Products'"
         )
@@ -38,7 +38,7 @@ def detect_csv_format(request):
     if errors:
         return JsonResponse({"status": "invalid", "errors": errors})
 
-    if has_substrates_products and has_substrate:
+    if has_full_reaction_cols and has_substrate:
         return JsonResponse(
             {
                 "status": "invalid",
@@ -48,7 +48,7 @@ def detect_csv_format(request):
         )
 
     valid_response = {"status": "valid", "num_rows": len(df)}
-    if has_substrates_products:
+    if has_full_reaction_cols:
         # Full-reaction schema (TurNup): explicit substrates and products columns.
         valid_response["csv_type"] = "full_reaction"
     else:

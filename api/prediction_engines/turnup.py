@@ -2,9 +2,9 @@
 #
 # Prediction engine for the TurNup model.
 #
-# Wraps the TurNup prediction script in a subprocess call.  Handles
-# multi-substrate/multi-product molecule validation, optional substrate
-# canonicalization, progress reporting, and user-friendly error messages.
+# Wraps the TurNup prediction script in a subprocess call. Handles full-reaction
+# molecule validation, optional substrate canonicalization, progress reporting,
+# and user-friendly error messages.
 
 import os
 import subprocess

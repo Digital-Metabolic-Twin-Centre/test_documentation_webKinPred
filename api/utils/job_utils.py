@@ -212,8 +212,8 @@ def get_experimental_results(
     """
     Look up experimental kinetic values when the user has opted in.
 
-    Experimental lookup is skipped for multi-substrate methods (TurNup) since
-    the experimental database is indexed by single substrates.
+    Experimental lookup is skipped for full-reaction methods (TurNup) since
+    the experimental database is indexed by single substrate strings.
 
     Returns a dict keyed by target ("kcat", "Km"), or None.
     """

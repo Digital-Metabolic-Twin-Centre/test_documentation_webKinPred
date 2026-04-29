@@ -15,17 +15,29 @@ from typing import Callable, Literal
 PredictionTarget = Literal["kcat", "Km", "kcat/Km"]
 """A kinetic parameter that a method can predict."""
 
-InputFormat = Literal["single", "multi"]
+InputFormat = Literal["single", "multi", "full reaction"]
 """
-The CSV input format expected by a method.
+The user-facing CSV input format.
 
 - "single": requires a single "Substrate" column (one SMILES/InChI per row).
-- "multi":  requires "Substrates" and "Products" columns
-            (semicolon-separated SMILES/InChI per row).
+- "multi": requires a single "Substrate" column with co-substrates dot-joined
+           in the same cell (for example, "A.B").
+- "full reaction": requires "Substrates" and "Products" columns
+                   (semicolon-separated SMILES/InChI per row).
 
-User-facing terminology also includes "full reaction".
-In backend descriptors and validation logic, "full reaction" is represented by
-"multi" with both "Substrates" and "Products" columns.
+Backend descriptors use ``DescriptorInputFormat`` below. In descriptors and
+validation logic, both user-facing "single" and "multi" use the "single"
+column contract. User-facing "full reaction" is represented by the backend
+"multi" contract with both "Substrates" and "Products" columns.
+"""
+
+DescriptorInputFormat = Literal["single", "multi"]
+"""
+The backend CSV column contract stored on method descriptors.
+
+- "single": reads the "Substrate" column.
+- "multi": reads the "Substrates" and "Products" columns, corresponding to
+           the user-facing "full reaction" input format.
 """
 
 
@@ -153,10 +165,13 @@ class MethodDescriptor:
         Which kinetic parameters this method can predict.
         E.g. ``["kcat"]``, ``["kcat", "Km"]``.
 
-    input_format : InputFormat
-        CSV format expected by the method: ``"single"`` (one substrate per
-        row) or ``"multi"`` (semicolon-separated substrates and products).
-        In user-facing text, ``"full reaction"`` maps to ``"multi"``.
+    input_format : DescriptorInputFormat
+        Backend CSV column contract expected by the method: ``"single"``
+        reads the ``Substrate`` column, while ``"multi"`` reads the
+        ``Substrates`` and ``Products`` columns. In user-facing text, the
+        visible CSV formats are ``"single"``, ``"multi"`` (dot-joined
+        co-substrates in ``Substrate``), and ``"full reaction"`` (the
+        ``Substrates``/``Products`` backend ``"multi"`` contract).
 
     output_cols : dict[str, str]
         Maps each supported prediction target to the output CSV column name.
@@ -260,7 +275,7 @@ class MethodDescriptor:
 
     # ── Capabilities ──────────────────────────────────────────────────────────
     supports: list[PredictionTarget] = field(default_factory=list)
-    input_format: InputFormat = "single"
+    input_format: DescriptorInputFormat = "single"
     output_cols: dict[str, str] = field(default_factory=dict)
 
     # ── Sequence length limit ─────────────────────────────────────────────────

@@ -85,10 +85,10 @@ def validate_csv_structure(dataframe: pd.DataFrame) -> Optional[str]:
         Error message if validation fails, None if valid
     """
     has_substrate_col = "Substrate" in dataframe.columns
-    has_multi_substrate_cols = "Substrates" in dataframe.columns and "Products" in dataframe.columns
+    has_full_reaction_cols = "Substrates" in dataframe.columns and "Products" in dataframe.columns
     has_protein_col = "Protein Sequence" in dataframe.columns
 
-    if not (has_substrate_col or has_multi_substrate_cols):
+    if not (has_substrate_col or has_full_reaction_cols):
         return 'CSV must contain "Substrate" column OR "Substrates" and "Products" columns'
 
     if not has_protein_col:
@@ -143,9 +143,9 @@ def validate_single_substrate_schema(dataframe: pd.DataFrame) -> List[Dict[str, 
     return invalid_substrates
 
 
-def validate_multi_substrate_schema(dataframe: pd.DataFrame) -> List[Dict[str, Any]]:
+def validate_full_reaction_schema(dataframe: pd.DataFrame) -> List[Dict[str, Any]]:
     """
-    Validate substrates using multi-substrate schema (Substrates and Products columns).
+    Validate substrates/products using full-reaction schema.
 
     Args:
         dataframe: DataFrame containing Substrates and Products columns
@@ -196,7 +196,7 @@ def validate_substrates(dataframe: pd.DataFrame) -> List[Dict[str, Any]]:
     if "Substrate" in dataframe.columns:
         return validate_single_substrate_schema(dataframe)
     elif "Substrates" in dataframe.columns and "Products" in dataframe.columns:
-        return validate_multi_substrate_schema(dataframe)
+        return validate_full_reaction_schema(dataframe)
     else:
         return []
 

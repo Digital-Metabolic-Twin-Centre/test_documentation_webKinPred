@@ -867,9 +867,12 @@ export default function ApiDocs() {
 
           <div className="api-callout api-callout-info" style={{ marginTop: '1rem' }}>
             <strong>Substrate format:</strong> Use SMILES strings (e.g.{' '}
-            <code>CC(=O)O</code> for acetic acid) or InChI strings. For TurNup,
-            separate multiple substrates/products with semicolons:{' '}
-            <code>CC(=O)O;C1CCCCC1</code>.
+            <code>CC(=O)O</code> for acetic acid) or InChI strings. Single inputs use
+            one value in <code>Substrate</code>. Multi-substrate inputs dot-join
+            co-substrates in <code>Substrate</code>, e.g. <code>CC(=O)O.O</code>.
+            Full-reaction inputs, used by TurNup, separate multiple substrates or
+            products with semicolons in <code>Substrates</code> and <code>Products</code>,
+            e.g. <code>CC(=O)O;C1CCCCC1</code>.
           </div>
         </section>
 
