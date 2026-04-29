@@ -16,6 +16,8 @@ Open Kinetics Predictor is a production web interface for predicting enzyme kine
 | EITLEM | Protein sequence + substrate SMILES | kcat or Km | [Shen et al., Biotechnol Adv 2024](https://www.sciencedirect.com/science/article/pii/S2667109324002665) ([GitHub](https://github.com/XvesS/EITLEM-Kinetics)) |
 | CataPro | Protein sequence + substrate SMILES | kcat, Km, or kcat/Km | [Wang et al., Nat Commun 2025](https://www.nature.com/articles/s41467-025-58038-4) ([GitHub](https://github.com/zchwang/CataPro)) |
 | CatPred | Protein sequence + substrate SMILES | kcat or Km | [Boorla et al., Nat Commun 2025](https://www.nature.com/articles/s41467-025-57215-9) ([GitHub](https://github.com/maranasgroup/CatPred)) |
+| OmniESI | Protein sequence + substrate SMILES | kcat or Km | [Nie et al., arXiv 2025](https://doi.org/10.48550/arXiv.2506.17963) ([GitHub](https://github.com/Hong-yu-Zhang/OmniESI)) |
+| MMISA-KM | Protein sequence + substrate SMILES | Km | [Song & Wang, DDCLS 2025](https://doi.org/10.1109/DDCLS66240.2025.11064981) ([GitHub](https://github.com/kaiwang-group/MMISA-KM)) |
 
 Each model is loaded with its published weights/code from `models/` and invoked through integration wrappers in `api/prediction_engines/`, so new engines can be added with minimal wiring.
 
@@ -288,6 +290,8 @@ column with co-substrates dot-joined in one cell, for example `CC(=O)O.O`.
 | KinForm-H | kcat or Km | `Protein Sequence`, `Substrate` | 1,500 residues |
 | KinForm-L | kcat only | `Protein Sequence`, `Substrate` | 1,500 residues |
 | CatPred | kcat or Km | `Protein Sequence`, `Substrate` | 2,048 residues |
+| OmniESI | kcat or Km | `Protein Sequence`, `Substrate` | 1,000 residues |
+| MMISA-KM | Km | `Protein Sequence`, `Substrate` | 500 residues |
 
 Substrates and products must be SMILES or InChI strings. For `multi` inputs,
 dot-join co-substrates in `Substrate`: `CC(=O)O.O`. For `full reaction`
