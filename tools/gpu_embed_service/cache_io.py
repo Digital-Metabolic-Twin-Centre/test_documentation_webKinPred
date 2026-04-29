@@ -203,6 +203,42 @@ def merge_manifest_entries(cache_dir: Path, updates: dict[str, dict]) -> None:
     _atomic_write_json(manifest_path, payload)
 
 
+def remove_manifest_entries(cache_dir: Path, seq_ids: Iterable[str]) -> None:
+    """Remove entries from a cache manifest after ephemeral file cleanup.
+
+    This keeps future planning fast: resolve_missing_ids can continue trusting
+    the manifest without doing one mounted-filesystem stat per requested ID.
+    """
+    cache_dir = cache_dir.resolve()
+    manifest_path = cache_dir / _MANIFEST_NAME
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return
+    except Exception:
+        return
+
+    entries = payload.get("entries")
+    if not isinstance(entries, dict):
+        return
+
+    removed = False
+    for seq_id in seq_ids:
+        key = str(seq_id).strip()
+        if key and key in entries:
+            entries.pop(key, None)
+            removed = True
+
+    if not removed:
+        return
+
+    payload["version"] = 1
+    payload["updated_at"] = time.time()
+    payload["entries"] = entries
+    payload["count"] = len(entries)
+    _atomic_write_json(manifest_path, payload)
+
+
 class SpoolAsyncCommitter:
     """Write artifacts to local spool, then async commit to shared cache.
 

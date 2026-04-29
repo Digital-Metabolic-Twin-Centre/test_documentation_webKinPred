@@ -18,12 +18,12 @@ Output JSON:
     The OmniESI model outputs log10-scaled values; this script applies the
     inverse transform (10**) after ensemble averaging in log space.
 
-Embedding cache
----------------
+Embedding staging
+-----------------
 OmniESI requires full per-residue ESM2 token matrices — shape [seq_len, 1280]
 using esm2_t33_650M_UR50D.  This is architecturally distinct from CatPred's
-cache (which stores checkpoint-specific *pooled* vectors), so OmniESI uses its
-own embedding family:
+cache (which stores checkpoint-specific *pooled* vectors), so OmniESI uses an
+ephemeral embedding family:
 
     <OMNIESI_EMBED_CACHE_DIR>/<seq_id>.pt   (cpu tensor, shape [seq_len, 1280])
 
@@ -35,7 +35,11 @@ If a seq_id is present in the payload row, the shared cache is checked first.
 If the file is missing the embedding is computed on-the-fly (fail-open), which
 is the correct fallback when GPU precompute is unavailable.
 
-If no seq_id is present in the row (e.g. local dev), caching is skipped.
+After prediction, staged full-residue matrices for this job are deleted by
+default, matching EITLEM's esm1v flow. Set OMNIESI_DELETE_EMBEDDINGS_AFTER_RUN=0
+only for debugging.
+
+If no seq_id is present in the row (e.g. local dev), staging is skipped.
 
 Environment variables (all optional):
     OMNIESI_EMBED_CACHE_DIR
@@ -54,6 +58,8 @@ Environment variables (all optional):
         Default: probed relative to OmniESI_ROOT.
     CUDA_VISIBLE_DEVICES
         Standard mechanism to select a specific GPU on multi-GPU hosts.
+    OMNIESI_DELETE_EMBEDDINGS_AFTER_RUN
+        Default: 1. Delete full residue matrices after this prediction run.
 """
 
 from __future__ import annotations
@@ -157,6 +163,10 @@ logger.debug("OmniESI code root resolved to: %s", ROOT_DIR)
 # ============================================================================
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+DELETE_EMBEDDINGS_AFTER_RUN = (
+    str(os.environ.get("OMNIESI_DELETE_EMBEDDINGS_AFTER_RUN", "1")).strip().lower()
+    in {"1", "true", "yes", "on"}
+)
 
 # ============================================================================
 # Constants
@@ -191,13 +201,13 @@ def _ensure_omniesi_code_importable() -> None:
 
 
 # ============================================================================
-# Shared embedding cache I/O
+# Shared embedding staging I/O
 #
 # Cache key: seq_id  (platform-assigned stable identifier, from seqmap tool).
 # File path: OMNIESI_EMBED_CACHE_DIR / <seq_id>.pt
 # Stored tensor shape: [seq_len, 1280]  (cpu, float32)
 #
-# If seq_id is absent (local / test usage), caching is skipped entirely and
+# If seq_id is absent (local / test usage), staging is skipped entirely and
 # the embedding is computed fresh each time — the fail-open path.
 # ============================================================================
 
@@ -231,7 +241,7 @@ def _load_shared_embedding(seq_id: str | None) -> torch.Tensor | None:
 
 def _save_shared_embedding(seq_id: str | None, embedding: torch.Tensor) -> None:
     """
-    Persist a per-residue ESM2 embedding to the shared cache.
+    Persist a per-residue ESM2 embedding to the shared staging directory.
 
     Stores shape [seq_len, 1280] (strips batch dim if present) so the file
     is as compact as possible and GPU-step writers also use this convention.
@@ -248,6 +258,23 @@ def _save_shared_embedding(seq_id: str | None, embedding: torch.Tensor) -> None:
         torch.save(tensor_to_save, cache_path)
     except Exception as exc:
         logger.warning("Embedding cache write failed for seq_id=%r: %s", seq_id, exc)
+
+
+def _cleanup_shared_embeddings(seq_ids: list[str]) -> None:
+    if not DELETE_EMBEDDINGS_AFTER_RUN:
+        return
+    cleanup_ids = {str(sid).strip() for sid in seq_ids if str(sid).strip()}
+    for seq_id in cleanup_ids:
+        try:
+            _embed_cache_path(seq_id).unlink(missing_ok=True)
+        except OSError:
+            pass
+    try:
+        from tools.gpu_embed_service.cache_io import remove_manifest_entries
+
+        remove_manifest_entries(OMNIESI_EMBED_CACHE_DIR, cleanup_ids)
+    except Exception as exc:
+        logger.warning("Embedding manifest cleanup failed: %s", exc)
 
 
 # ============================================================================
@@ -342,7 +369,7 @@ def _kinetics_type_from_payload(payload: dict[str, Any]) -> str:
 def prepare_inputs(
     smiles: str,
     protein_seq: str,
-    embedder: Any,            # ESM_model instance
+    embedder: Any | None,     # ESM_model instance, lazy on cache miss
     seq_id: str | None,       # shared cache key; None = skip caching
 ) -> tuple[Any, torch.Tensor, torch.Tensor, torch.Tensor] | None:
     """
@@ -378,6 +405,8 @@ def prepare_inputs(
         v_p = _load_shared_embedding(seq_id)
         if v_p is None:
             # Cache miss (or no seq_id) — compute via ESM and persist.
+            if embedder is None:
+                embedder = _get_esm_model(device)
             v_p = embedder([protein_seq])
             v_p = v_p[:, 1 : len(protein_seq) + 1, :]   # strip BOS token
             _save_shared_embedding(seq_id, v_p)
@@ -418,7 +447,7 @@ def _discover_available_seeds(weight_folder: Path) -> list[int]:
 def predict_kinetic_parameter_ensemble(
     valid_df: pd.DataFrame,
     kinetics_type: str,
-    esm_model: Any,
+    esm_model: Any | None,
     n_total_rows: int,
     first_valid_global_idx: int,
     valid_global_indices: list[int],
@@ -584,22 +613,26 @@ def run_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "invalid_indices": sorted(invalid_indices),
         }
 
-    try:
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
-        esm_model = _get_esm_model(device)
-    except Exception as exc:
-        raise RuntimeError(f"Failed to initialise ESM model: {exc}") from exc
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
 
-    valid_df    = pd.DataFrame(valid_rows)
-    valid_preds = predict_kinetic_parameter_ensemble(
-        valid_df               = valid_df,
-        kinetics_type          = kinetics_type,
-        esm_model              = esm_model,
-        n_total_rows           = n_total,
-        first_valid_global_idx = valid_indices[0],
-        valid_global_indices   = valid_indices,
-    )
+    valid_df = pd.DataFrame(valid_rows)
+    touched_seq_ids = [
+        str(row.get("seq_id", "")).strip()
+        for row in valid_rows
+        if str(row.get("seq_id", "")).strip()
+    ]
+    try:
+        valid_preds = predict_kinetic_parameter_ensemble(
+            valid_df               = valid_df,
+            kinetics_type          = kinetics_type,
+            esm_model              = None,
+            n_total_rows           = n_total,
+            first_valid_global_idx = valid_indices[0],
+            valid_global_indices   = valid_indices,
+        )
+    finally:
+        _cleanup_shared_embeddings(touched_seq_ids)
 
     for local_idx, pred in enumerate(valid_preds):
         global_idx = valid_indices[local_idx]

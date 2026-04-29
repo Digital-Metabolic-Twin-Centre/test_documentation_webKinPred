@@ -456,7 +456,14 @@ class _EmbeddingTracker:
             return
 
         payload = self._payload()
-        redis_conn.set(_redis_key(self.job_public_id), json.dumps(payload), ex=_TTL_SECONDS)
+        try:
+            redis_conn.set(_redis_key(self.job_public_id), json.dumps(payload), ex=_TTL_SECONDS)
+        except Exception as exc:
+            # Progress is telemetry. Redis outages must not abort prediction.
+            print(
+                f"[embedding_progress] redis write skipped for "
+                f"{self.job_public_id}/{self.method_key}: {exc}"
+            )
         _sync_stage_embedding_progress(
             job_public_id=self.job_public_id,
             target=self.target,

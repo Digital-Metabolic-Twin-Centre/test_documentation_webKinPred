@@ -23,6 +23,10 @@ from api.prediction_engines.runtime_paths import (
     PREDICTION_SCRIPTS,
     PYTHON_PATHS,
 )
+from api.services.embedding_plan_service import (
+    resolve_media_and_tools,
+    resolve_seq_ids_via_cli,
+)
 from api.services.gpu_embed_service import run_gpu_precompute_if_available
 from api.services.job_progress_service import (
     increment_stage_validation,
@@ -105,18 +109,25 @@ def run_generic_subprocess_prediction(
 
     python_path, script_path = _resolve_subprocess_paths(desc)
     env = _build_subprocess_env(desc)
-    _gpu = run_gpu_precompute_if_available(
-        job_public_id=public_id,
-        method_key=desc.key,
-        target=target,
-        valid_sequences=[str(row.get("sequence", "")) for row in valid_rows],
-        env=env,
-    )
-    if _gpu.attempted and not _gpu.completed:
-        _log.warning(
-            "GPU precompute incomplete for %s job %s: %s (used_gpu=%s, failed=%s)",
-            desc.key, public_id, _gpu.reason, _gpu.used_gpu, _gpu.failed,
+    valid_sequences = [str(row.get("sequence", "")) for row in valid_rows]
+    embedding_sequences = valid_sequences if desc.embeddings_used else None
+
+    if desc.key == "OmniESI":
+        _attach_seq_ids_to_rows(desc=desc, rows=valid_rows, sequences=valid_sequences, env=env)
+
+    if embedding_sequences:
+        _gpu = run_gpu_precompute_if_available(
+            job_public_id=public_id,
+            method_key=desc.key,
+            target=target,
+            valid_sequences=embedding_sequences,
+            env=env,
         )
+        if _gpu.attempted and not _gpu.completed:
+            _log.warning(
+                "GPU precompute incomplete for %s job %s: %s (used_gpu=%s, failed=%s)",
+                desc.key, public_id, _gpu.reason, _gpu.used_gpu, _gpu.failed,
+            )
 
     job_dir = os.path.join(MEDIA_ROOT, "jobs", str(public_id))
     safe_method = re.sub(r"[^A-Za-z0-9_-]+", "_", desc.key)
@@ -158,7 +169,7 @@ def run_generic_subprocess_prediction(
             label=desc.display_name,
             method_key=desc.key,
             target=target,
-            valid_sequences=[str(row.get("sequence", "")) for row in valid_rows],
+            valid_sequences=embedding_sequences,
         )
     except subprocess.CalledProcessError as e:
         _cleanup(input_file, output_file)
@@ -388,6 +399,47 @@ def _build_subprocess_env(desc: MethodDescriptor) -> dict[str, str]:
         env[env_var] = str(value)
 
     return env
+
+
+def _attach_seq_ids_to_rows(
+    *,
+    desc: MethodDescriptor,
+    rows: list[dict[str, Any]],
+    sequences: list[str],
+    env: dict[str, str],
+) -> None:
+    """Attach shared seqmap IDs for subprocess scripts that consume them.
+
+    Most generic subprocess adapters resolve sequence IDs internally. OmniESI
+    intentionally does not: its local fallback cache uses the same seq_id key
+    planned for remote GPU precompute, so the platform passes that key in the
+    payload row.
+    """
+    if not rows:
+        return
+
+    try:
+        media_path, tools_path = resolve_media_and_tools(desc.key, env)
+        seq_ids = resolve_seq_ids_via_cli(sequences, tools_path, media_path)
+    except Exception as exc:
+        _log.warning(
+            "Could not attach seq_ids for %s; embedding cache will be skipped in subprocess: %s",
+            desc.key,
+            exc,
+        )
+        return
+
+    if len(seq_ids) != len(rows):
+        _log.warning(
+            "Could not attach seq_ids for %s; got %d id(s) for %d row(s)",
+            desc.key,
+            len(seq_ids),
+            len(rows),
+        )
+        return
+
+    for row, seq_id in zip(rows, seq_ids):
+        row["seq_id"] = seq_id
 
 
 def _read_output(method_label: str, output_file: str) -> tuple[list[Any], dict[int, str]]:

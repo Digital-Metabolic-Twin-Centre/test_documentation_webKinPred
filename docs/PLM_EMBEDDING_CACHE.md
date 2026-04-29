@@ -148,6 +148,39 @@ Also present in the repo:
 - This script shows the preferred full-matrix ephemeral cleanup pattern.
 - It removes touched `esm1v` files after prediction.
 
+### 3.7 OmniESI
+
+Engine and planner:
+
+- Engine: generic subprocess `api/prediction_engines/generic_subprocess.py`
+- Planner profile: `omniesi_esm2`
+- GPU precompute call: yes, from generic engine
+
+Staged artefact:
+
+- `media/sequence_info/omniesi_esm2/{seq_id}.pt`
+
+GPU step:
+
+- `omniesi_esm2`
+
+OmniESI stages the full per-residue `esm2_t33_650M_UR50D` layer-33 tensor,
+shape `[seq_len, 1280]`, as a CPU `.pt` file. Prediction deletes these files
+after the run, matching EITLEM's ephemeral `esm1v` behaviour. This is
+intentionally separate from CatPred's checkpoint-specific pooled ESM2 cache.
+
+### 3.8 MMISA-KM
+
+MMISA-KM does not use a PLM embedding cache and is not GPU-offload eligible in
+the shared embedding system.
+
+It uses a method-local contact-map cache:
+
+- `MMISA_KM_CACHE_DIR`
+
+The generic subprocess engine skips shared embedding planning and progress
+tracking for MMISA-KM because its descriptor has `embeddings_used=[]`.
+
 ## 4. Planner contract
 
 `build_embedding_plan(...)` produces an `EmbeddingPlan` with:
@@ -259,6 +292,7 @@ Current active step keys:
 - `eitlem_esm1v`
 - `catpred_embed_kcat`
 - `catpred_embed_km`
+- `omniesi_esm2`
 
 Deprecated keys kept for compatibility:
 
@@ -309,6 +343,7 @@ Existing PLM caches:
 - `esmc_layer_32/weighted_vecs/{seq_id}.npy`: weighted average of `esmc_600m` layer 32 residue embeddings, with Pseq2Sites binding-site probabilities (KinForm).
 - `esm1b_turnup/{seq_id}.npy`: TurNup protein vector derived from `esm1b_t33_650M_UR50S` plus the TurNup fine-tuned checkpoint (`model_ESM_binary_A100_epoch_1_new_split.pkl`).
 - `catpred_esm2/{kcat|km}/{model_key}/{seq_id}.pt`: CatPred checkpoint-specific pooled tensor, generated from `esm2_t33_650M_UR50D` residue features and attentive pooling.
+- `omniesi_esm2/{seq_id}.pt`: OmniESI ephemeral full per-residue `esm2_t33_650M_UR50D` layer-33 tensor.
 
 ### 9.1 Reuse an existing embedding family
 

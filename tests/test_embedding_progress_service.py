@@ -117,6 +117,26 @@ class EmbeddingProgressPlanningTests(unittest.TestCase):
                 self.assertTrue(path.endswith("seq_123.pt"))
                 self.assertIn("catpred_esm2/kcat/", path)
 
+    def test_omniesi_expected_paths_use_shared_seq_id_cache(self):
+        with tempfile.TemporaryDirectory(prefix="emb_prog_omniesi_") as tmp:
+            media = Path(tmp) / "media"
+            expected = eps._expected_paths_by_seq(
+                method_key="OmniESI",
+                target="Km",
+                seq_ids=["sid_123"],
+                media_path=media,
+                env={},
+            )
+
+            self.assertEqual(
+                expected,
+                {
+                    "sid_123": {
+                        str((media / "sequence_info" / "omniesi_esm2" / "sid_123.pt").resolve())
+                    }
+                },
+            )
+
     def test_start_tracking_skips_dlkcat(self):
         fake_progress_service.redis_conn.set("job_embedding_progress:job_x", '{"enabled": true}')
         started = eps.start_embedding_tracking(
@@ -154,6 +174,23 @@ class EmbeddingProgressPlanningTests(unittest.TestCase):
         self.assertTrue(second)
         self.assertEqual(tracker.computed, 2)
         self.assertEqual(tracker.remaining, 0)
+
+    def test_tracker_redis_write_failure_is_best_effort(self):
+        plan = eps._PreparedPlan(
+            method_key="OmniESI",
+            target="Km",
+            total=1,
+            cached_already=0,
+            need_computation=0,
+            missing_paths_by_seq={},
+            path_to_seqs={},
+            watch_dirs=set(),
+        )
+        tracker = eps._EmbeddingTracker(job_public_id="job_redis_down", plan=plan)
+
+        with patch.object(eps.redis_conn, "set", side_effect=RuntimeError("redis down")):
+            tracker.start()
+            tracker.stop()
 
 
 if __name__ == "__main__":

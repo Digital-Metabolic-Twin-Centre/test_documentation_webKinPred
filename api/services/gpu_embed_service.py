@@ -110,6 +110,11 @@ def get_gpu_status(*, force_refresh: bool = False) -> dict:
             "online": is_online,
             "mode": "gpu" if is_online else "cpu",
             "reason": None if is_online else "remote_offline",
+            "gpu_name": remote.get("gpu_name"),
+            "free_vram_gb": remote.get("free_vram_gb"),
+            "total_vram_gb": remote.get("total_vram_gb"),
+            "active_jobs": remote.get("active_jobs"),
+            "queued_jobs": remote.get("queued_jobs"),
         }
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as exc:
         payload = {

@@ -282,6 +282,31 @@ class EmbeddingPlanServiceTests(unittest.TestCase):
             self.assertEqual(plan.need_computation, 1)
             self.assertEqual(eps.gpu_step_work(plan), {"eitlem_esm1v": ["sid_2"]})
 
+    def test_omniesi_gpu_supported_with_esm2_cache(self):
+        """OmniESI uses its own full-residue ESM2 cache family."""
+        with tempfile.TemporaryDirectory(prefix="emb_plan_omniesi_") as tmp:
+            tmp_path = Path(tmp)
+            media = tmp_path / "media"
+            tools = tmp_path / "tools"
+
+            _touch(media / "sequence_info" / "omniesi_esm2" / "sid_1.pt")
+
+            with patch.object(eps, "resolve_media_and_tools", return_value=(media, tools)):
+                with patch.object(eps, "resolve_seq_ids_via_cli", return_value=["sid_1", "sid_2"]):
+                    plan = eps.build_embedding_plan(
+                        method_key="OmniESI",
+                        target="Km",
+                        sequences=["ACD", "EFG"],
+                        env={},
+                    )
+
+            self.assertTrue(plan.gpu_supported)
+            self.assertEqual(plan.profile, "omniesi_esm2")
+            self.assertEqual(plan.total, 2)
+            self.assertEqual(plan.cached_already, 1)
+            self.assertEqual(plan.need_computation, 1)
+            self.assertEqual(eps.gpu_step_work(plan), {"omniesi_esm2": ["sid_2"]})
+
 
 if __name__ == "__main__":
     unittest.main()

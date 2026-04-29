@@ -33,8 +33,8 @@ DEFAULT_KEY = "ak_17f90e7c1f6ac3f5fc861d8cec4667a2b888c358a333bb81f75b631a9b5006
 # ---------------------------------------------------------------------------
 
 # GPU-offload-capable methods (subset of the above)
-GPU_SUPPORTED_KCAT_METHOD_IDS = ["KinForm-H", "KinForm-L", "UniKP", "TurNup", "CataPro"]
-GPU_SUPPORTED_KM_METHOD_IDS = ["KinForm-H", "UniKP", "CataPro"]
+GPU_SUPPORTED_KCAT_METHOD_IDS = ["KinForm-H", "KinForm-L", "UniKP", "TurNup", "CataPro", "OmniESI"]
+GPU_SUPPORTED_KM_METHOD_IDS = ["KinForm-H", "UniKP", "CataPro", "OmniESI"]
 GPU_SUPPORTED_KCAT_KM_METHOD_IDS = ["CataPro"]
 
 # kcat-capable methods
@@ -47,9 +47,10 @@ KCAT_METHOD_IDS = [
     "KinForm-L",
     "CataPro",
     "CatPred",
+    "OmniESI",
 ]
 # Km-capable methods
-KM_METHOD_IDS = ["EITLEM", "UniKP", "KinForm-H", "CataPro", "CatPred"]
+KM_METHOD_IDS = ["EITLEM", "UniKP", "KinForm-H", "CataPro", "CatPred", "OmniESI", "MMISA-KM"]
 # kcat/Km-capable methods
 KCAT_KM_METHOD_IDS = ["CataPro"]
 # All recognised method IDs (de-duplicated, lowercase)

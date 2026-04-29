@@ -20,6 +20,10 @@ STEP_CHOICES = (
     "kinform_esmc_layers",
     "prot_t5_mean",
     "turnup_esm1b",
+    "eitlem_esm1v",
+    "catpred_embed_kcat",
+    "catpred_embed_km",
+    "omniesi_esm2",
 )
 
 
@@ -410,6 +414,124 @@ calcualte_esm1b_ts_vectors(seqs)
     _run([turnup_python, "-c", code, str(seq_map_json)], turnup_env)
 
 
+def _run_eitlem_esm1v(env: dict[str, str], seq_map_json: Path) -> None:
+    eitlem_python = (
+        os.environ.get("EITLEM_EMBED_PYTHON")
+        or os.environ.get("EITLEM_PYTHON")
+        or sys.executable
+    )
+    worker_script = (
+        Path(env["GPU_REPO_ROOT"]) / "tools" / "gpu_embed_service" / "eitlem_esm1v_worker.py"
+    ).resolve()
+    _ensure_exists(worker_script, "eitlem_esm1v_worker.py")
+
+    cache_dir = (Path(env["KINFORM_MEDIA_PATH"]) / "sequence_info" / "esm1v").resolve()
+    batch_size = _env_int("EITLEM_GPU_ESM1V_BATCH_SIZE", 4)
+    async_workers = _env_int("GPU_EMBED_CACHE_ASYNC_WORKERS", 8)
+    cmd = [
+        eitlem_python,
+        str(worker_script),
+        "--seq-id-to-seq-file",
+        str(seq_map_json),
+        "--cache-dir",
+        str(cache_dir),
+        "--batch-size",
+        str(batch_size),
+        "--async-workers",
+        str(async_workers),
+    ]
+    model_path = str(os.environ.get("EITLEM_MODEL_PATH", "")).strip()
+    if model_path:
+        cmd.extend(["--model-path", model_path])
+    _run(cmd, env)
+
+
+def _run_catpred_embed(env: dict[str, str], seq_map_json: Path, *, parameter: str) -> None:
+    catpred_python = (
+        os.environ.get("CATPRED_EMBED_PYTHON")
+        or os.environ.get("CATPRED_PYTHON")
+        or sys.executable
+    )
+    worker_script = (
+        Path(env["GPU_REPO_ROOT"])
+        / "models"
+        / "CatPred"
+        / "catpred"
+        / "integration"
+        / "catpred_embed_gpu.py"
+    ).resolve()
+    _ensure_exists(worker_script, "catpred_embed_gpu.py")
+
+    checkpoint_root = Path(
+        os.environ.get(
+            "CATPRED_CHECKPOINT_ROOT",
+            str(
+                (
+                    Path(env["GPU_REPO_ROOT"])
+                    / "models"
+                    / "CatPred"
+                    / "data"
+                    / "pretrained"
+                    / "production"
+                ).resolve()
+            ),
+        )
+    ).resolve()
+    cache_root = (Path(env["KINFORM_MEDIA_PATH"]) / "sequence_info" / "catpred_esm2").resolve()
+
+    _run(
+        [
+            catpred_python,
+            str(worker_script),
+            "--seq-id-to-seq-file",
+            str(seq_map_json),
+            "--parameter",
+            parameter,
+            "--checkpoint-root",
+            str(checkpoint_root),
+            "--cache-root",
+            str(cache_root),
+        ],
+        env,
+    )
+
+
+def _run_omniesi_esm2(env: dict[str, str], seq_map_json: Path) -> None:
+    omniesi_python = (
+        os.environ.get("OMNIESI_EMBED_PYTHON")
+        or os.environ.get("OmniESI_EMBED_PYTHON")
+        or os.environ.get("OMNIESI_PYTHON")
+        or sys.executable
+    )
+    worker_script = (
+        Path(env["GPU_REPO_ROOT"]) / "tools" / "gpu_embed_service" / "omniesi_esm2_worker.py"
+    ).resolve()
+    _ensure_exists(worker_script, "omniesi_esm2_worker.py")
+
+    cache_dir = (Path(env["KINFORM_MEDIA_PATH"]) / "sequence_info" / "omniesi_esm2").resolve()
+    token_budget = _env_int("OMNIESI_GPU_ESM_TOKEN_BUDGET", 6000)
+    max_batch = _env_int("OMNIESI_GPU_ESM_MAX_BATCH", 8)
+    async_workers = _env_int("GPU_EMBED_CACHE_ASYNC_WORKERS", 8)
+
+    _run(
+        [
+            omniesi_python,
+            str(worker_script),
+            "--seq-id-to-seq-file",
+            str(seq_map_json),
+            "--cache-dir",
+            str(cache_dir),
+            "--token-budget",
+            str(token_budget),
+            "--max-batch",
+            str(max_batch),
+            "--async-workers",
+            str(async_workers),
+        ],
+        env,
+    )
+
+
 def run_step(
     step: str,
     seq_ids: list[str],
@@ -453,6 +575,14 @@ def run_step(
             _run_prot_t5_mean(env, seq_map_json)
         elif step == "turnup_esm1b":
             _run_turnup(env, seq_map_json)
+        elif step == "eitlem_esm1v":
+            _run_eitlem_esm1v(env, seq_map_json)
+        elif step == "catpred_embed_kcat":
+            _run_catpred_embed(env, seq_map_json, parameter="kcat")
+        elif step == "catpred_embed_km":
+            _run_catpred_embed(env, seq_map_json, parameter="km")
+        elif step == "omniesi_esm2":
+            _run_omniesi_esm2(env, seq_map_json)
         else:
             raise RuntimeError(f"Unsupported step: {step}")
     finally:
