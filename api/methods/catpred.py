@@ -15,8 +15,7 @@ descriptor = MethodDescriptor(
     citation_url="https://www.nature.com/articles/s41467-025-57215-9",
     repo_url="https://github.com/maranasgroup/CatPred",
     more_info=(
-        "CatPred currently integrates kcat and Km through a local CPU inference "
-        "adapter. Ki remains outside the current webKinPred target model."
+        "Recommended for wildtype proteins."
     ),
     supports=["kcat", "Km"],
     input_format="single",

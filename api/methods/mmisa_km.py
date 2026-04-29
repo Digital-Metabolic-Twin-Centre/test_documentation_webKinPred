@@ -15,7 +15,7 @@ descriptor = MethodDescriptor(
     citation_url="https://doi.org/10.1109/DDCLS66240.2025.11064981",
     repo_url="https://github.com/kaiwang-group/MMISA-KM",
     more_info=(
-        "Km-only method. Supports single-substrate input with one SMILES/InChI per row."
+        ""
     ),
     supports=["Km"],
     input_format="single",
