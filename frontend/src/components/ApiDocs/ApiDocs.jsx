@@ -551,6 +551,8 @@ export default function ApiDocs() {
     "KinForm-H": 0,
     "KinForm-L": 0,
     "CatPred": 0,
+    "OmniESI": 0,
+    "MMISA-KM": 0,
     "Server": 0
   },
   "lengthLimits": {
@@ -562,6 +564,8 @@ export default function ApiDocs() {
     "KinForm-H": 1500,
     "KinForm-L": 1500,
     "CatPred": 2048,
+    "OmniESI": 1000,
+    "MMISA-KM": 500,
     "Server": 10000
   },
   "similarity": null
@@ -861,6 +865,18 @@ export default function ApiDocs() {
                 <td>kcat or Km</td>
                 <td><code>Protein Sequence</code>, <code>Substrate</code></td>
                 <td>2,048 residues</td>
+              </tr>
+              <tr>
+                <td><code>OmniESI</code></td>
+                <td>kcat or Km</td>
+                <td><code>Protein Sequence</code>, <code>Substrate</code></td>
+                <td>1,000 residues</td>
+              </tr>
+              <tr>
+                <td><code>MMISA-KM</code></td>
+                <td>Km</td>
+                <td><code>Protein Sequence</code>, <code>Substrate</code></td>
+                <td>500 residues</td>
               </tr>
             </tbody>
           </table>

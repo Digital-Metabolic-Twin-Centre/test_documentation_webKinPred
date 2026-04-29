@@ -176,7 +176,7 @@ the shared embedding system.
 
 It uses a method-local contact-map cache:
 
-- `MMISA_KM_CACHE_DIR`
+- `MMISA_KM_CACHE_DIR` → `media/sequence_info/mmisa_km_contacts/`
 
 The generic subprocess engine skips shared embedding planning and progress
 tracking for MMISA-KM because its descriptor has `embeddings_used=[]`.
