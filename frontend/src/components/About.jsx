@@ -39,6 +39,11 @@ const teamInstitutions = [
     location: 'Jinan, China',
     members: ['Zechen Wang'],
   },
+  {
+    institution: 'AG Töpfer, Department of Biology, University of Cologne',
+    location: 'Cologne, Germany',
+    members: ['Nadine Töpfer', 'Jan-Niklas Weder', 'Karim Taha'],
+  },
 ];
 
 const About = () => {
