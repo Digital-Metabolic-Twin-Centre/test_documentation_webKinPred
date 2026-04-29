@@ -5,6 +5,37 @@ import { Card, Row, Col, Alert, Button } from 'react-bootstrap';
 import { BoxArrowInDown, Bullseye, CloudUpload, Cpu, Github, ChevronDown, BoxArrowUpRight } from 'react-bootstrap-icons';
 import '../../../styles/components/HowToUseCard.css';
 
+const FORMAT_SPECS = [
+  {
+    key: 'single',
+    name: 'Single-Substrate',
+    methods: ['CataPro', 'CatPred (Km)', 'DLKcat', 'EITLEM', 'KinForm-H', 'KinForm-L', 'MMISA-KM', 'OmniESI', 'UniKP'],
+    columns: [
+      { col: 'protein_sequence', desc: 'full amino-acid sequence' },
+      { col: 'substrate',        desc: 'SMILES or InChI — one per row' },
+    ],
+  },
+  {
+    key: 'multi',
+    name: 'Multi-Substrate',
+    methods: ['CatPred (kcat)'],
+    columns: [
+      { col: 'protein_sequence', desc: 'full amino-acid sequence' },
+      { col: 'substrate',        desc: <span>co-substrates joined with <code className="fmt-dot">.</code> <span className="fmt-eg">e.g. CC(=O)O.O</span></span> },
+    ],
+  },
+  {
+    key: 'full',
+    name: 'Full Reaction',
+    methods: ['TurNup'],
+    columns: [
+      { col: 'protein_sequence', desc: 'full amino-acid sequence' },
+      { col: 'substrates',       desc: 'semicolon-separated SMILES or InChI' },
+      { col: 'products',         desc: 'semicolon-separated SMILES or InChI' },
+    ],
+  },
+];
+
 
 export default function HowToUseCard({ methods = {} }) {
   const [openKeys, setOpenKeys] = useState(new Set());
@@ -141,64 +172,25 @@ export default function HowToUseCard({ methods = {} }) {
 
         <hr className="my-4" />
         <h4 className="text-center mb-3">Input Data Format</h4>
-        <p className="fmtt-subtitle">Required CSV columns for each format</p>
-        <div className="fmttable">
-          {/* Column headers */}
-          <div className="fmtt-row fmtt-head">
-            <div className="fmtt-label-cell" />
-            <div className="fmtt-cell fmtt-col-head">
-              <span className="fmtt-format-name">Single-Substrate</span>
-              <span className="fmtt-models">DLKcat · EITLEM · UniKP · KinForm-H · KinForm-L · CataPro · CatPred (K<sub>M</sub>)</span>
+        <div className="fmt-grid">
+          {FORMAT_SPECS.map(({ key, name, methods, columns }) => (
+            <div key={key} className={`fmt-card fmt-card--${key}`}>
+              <div className="fmt-card-name">{name}</div>
+              <div className="fmt-methods">
+                {methods.map(m => (
+                  <span key={m} className="fmt-method-chip">{m}</span>
+                ))}
+              </div>
+              <div className="fmt-columns">
+                {columns.map(({ col, desc }) => (
+                  <div key={col} className="fmt-col-row">
+                    <code className="fmt-col-code">{col}</code>
+                    <span className="fmt-col-desc">{desc}</span>
+                  </div>
+                ))}
+              </div>
             </div>
-            <div className="fmtt-cell fmtt-col-head">
-              <span className="fmtt-format-name">Multi-Substrate</span>
-              <span className="fmtt-models">CatPred (k<sub>cat</sub> only)</span>
-            </div>
-            <div className="fmtt-cell fmtt-col-head">
-              <span className="fmtt-format-name">Full Reaction</span>
-              <span className="fmtt-models">TurNup</span>
-            </div>
-          </div>
-
-          {/* Protein Sequence */}
-          <div className="fmtt-row">
-            <div className="fmtt-label-cell">
-              <code className="fmtt-label">Protein Sequence</code>
-            </div>
-            <div className="fmtt-cell fmtt-present">Full amino-acid sequence</div>
-            <div className="fmtt-cell fmtt-present">Full amino-acid sequence</div>
-            <div className="fmtt-cell fmtt-present">Full amino-acid sequence</div>
-          </div>
-
-          {/* Substrate (singular) */}
-          <div className="fmtt-row">
-            <div className="fmtt-label-cell">
-              <code className="fmtt-label">Substrate</code>
-            </div>
-            <div className="fmtt-cell fmtt-present"><code>SMILES</code> or <code>InChI</code> — one per row</div>
-            <div className="fmtt-cell fmtt-present">Co-substrates joined with <code>.</code> <span className="fmtt-example">e.g. CC(=O)O.O</span></div>
-            <div className="fmtt-cell fmtt-absent"><span className="fmtt-not-required">not applicable</span></div>
-          </div>
-
-          {/* Substrates (plural) */}
-          <div className="fmtt-row">
-            <div className="fmtt-label-cell">
-              <code className="fmtt-label">Substrates</code>
-            </div>
-            <div className="fmtt-cell fmtt-absent"><span className="fmtt-not-required">not applicable</span></div>
-            <div className="fmtt-cell fmtt-absent"><span className="fmtt-not-required">not applicable</span></div>
-            <div className="fmtt-cell fmtt-present">Semicolon-separated <code>SMILES</code> or <code>InChI</code></div>
-          </div>
-
-          {/* Products */}
-          <div className="fmtt-row">
-            <div className="fmtt-label-cell">
-              <code className="fmtt-label">Products</code>
-            </div>
-            <div className="fmtt-cell fmtt-absent"><span className="fmtt-not-required">not applicable</span></div>
-            <div className="fmtt-cell fmtt-absent"><span className="fmtt-not-required">not applicable</span></div>
-            <div className="fmtt-cell fmtt-present">Semicolon-separated <code>SMILES</code> or <code>InChI</code></div>
-          </div>
+          ))}
         </div>
 
         <hr className="my-4" />

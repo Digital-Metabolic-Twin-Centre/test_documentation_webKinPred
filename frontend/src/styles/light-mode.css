@@ -697,6 +697,22 @@
 [data-theme="light"] .mpill-github           { color: rgba(28, 20, 67, 0.4); }
 [data-theme="light"] .mpill-github:hover     { color: rgba(28, 20, 67, 0.85); }
 
+/* Format cards */
+[data-theme="light"] .fmt-card              { background: rgba(255, 255, 255, 0.92); border-color: rgba(110, 90, 200, 0.14); }
+[data-theme="light"] .fmt-card-name         { color: rgba(28, 20, 67, 0.9); background: rgba(110, 90, 200, 0.04); border-bottom-color: rgba(110, 90, 200, 0.1); }
+[data-theme="light"] .fmt-card--single .fmt-card-name { border-left-color: rgba(110, 90, 200, 0.5); }
+[data-theme="light"] .fmt-card--multi  .fmt-card-name { border-left-color: rgba(60, 130, 220, 0.5); }
+[data-theme="light"] .fmt-card--full   .fmt-card-name { border-left-color: rgba(30, 160, 120, 0.5); }
+[data-theme="light"] .fmt-methods           { border-bottom-color: rgba(110, 90, 200, 0.08); }
+[data-theme="light"] .fmt-card--single .fmt-method-chip { background: rgba(110, 90, 200, 0.08); border-color: rgba(110, 90, 200, 0.2); color: #4835b4; }
+[data-theme="light"] .fmt-card--multi  .fmt-method-chip { background: rgba(60, 130, 220, 0.08); border-color: rgba(60, 130, 220, 0.2); color: #1a5fa8; }
+[data-theme="light"] .fmt-card--full   .fmt-method-chip { background: rgba(30, 160, 120, 0.08); border-color: rgba(30, 160, 120, 0.2); color: #0e6e50; }
+[data-theme="light"] .fmt-col-row           { border-bottom-color: rgba(28, 20, 67, 0.05); }
+[data-theme="light"] .fmt-col-code          { color: rgba(28, 20, 67, 0.88); background: rgba(28, 20, 67, 0.07); }
+[data-theme="light"] .fmt-col-desc          { color: rgba(28, 20, 67, 0.52); }
+[data-theme="light"] .fmt-dot               { color: rgba(28, 20, 67, 0.78); background: rgba(28, 20, 67, 0.08); }
+[data-theme="light"] .fmt-eg                { color: rgba(28, 20, 67, 0.32); }
+
 /* ═══════════════════════════════════════════════════════════
    14. LIVE LOG OVERLAY
    (stays visually dark — terminal aesthetic; only buttons adapt)
