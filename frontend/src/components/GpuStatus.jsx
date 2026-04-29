@@ -8,15 +8,31 @@ const BENCHMARK_DATA = [
   {
     method: 'DLKcat',
     uncachedCpu: '32 s',
-    uncachedGpu: '32 s',
+    uncachedGpu: 'N/A',
+    uncachedGpuTooltip: 'not implemented',
     cached: 'N/A',
     cachedTooltip: 'Does not use PLM embeddings',
+  },
+  {
+    method: 'MMISA-KM',
+    uncachedCpu: '4 min 22 s',
+    uncachedGpu: 'N/A',
+    uncachedGpuTooltip: 'not implemented',
+    cached: 'N/A',
+    cachedTooltip: 'not implemented because no embeddings and contact map is already fast enough',
   },
   { method: 'CatPred',   uncachedCpu: '14 min 0 s',   uncachedGpu: '5 min 54 s', cached: '23 s'      },
   {
     method: 'EITLEM',
     uncachedCpu: '18 min 13 s',
     uncachedGpu: '7 min 43 s',
+    cached: 'N/A',
+    cachedTooltip: 'uses full per-residue embeddings, thus not cached on server',
+  },
+  {
+    method: 'OmniESI',
+    uncachedCpu: '18 min 41 s',
+    uncachedGpu: '7 min 34 s',
     cached: 'N/A',
     cachedTooltip: 'uses full per-residue embeddings, thus not cached on server',
   },
@@ -130,10 +146,15 @@ export default function GpuStatus({ layout = 'home' }) {
                         </tr>
                       </thead>
                       <tbody>
-                        {BENCHMARK_DATA.map(({ method, uncachedGpu, uncachedCpu, cached, cachedTooltip }) => (
+                        {BENCHMARK_DATA.map(({ method, uncachedGpu, uncachedCpu, cached, cachedTooltip, uncachedGpuTooltip }) => (
                           <tr key={method}>
                             <td className="benchmark-method">{method}</td>
-                            <td className={`benchmark-time ${uncachedGpu ? '' : 'benchmark-empty'}`}>{uncachedGpu || '—'}</td>
+                            <td 
+                              className={`benchmark-time ${uncachedGpu === 'N/A' ? 'benchmark-na' : uncachedGpu ? '' : 'benchmark-empty'}`}
+                              title={uncachedGpuTooltip || undefined}
+                            >
+                              {uncachedGpu || '—'}
+                            </td>
                             <td className="benchmark-time">{uncachedCpu ?? '—'}</td>
                             <td
                               className={`benchmark-time ${cached === 'N/A' ? 'benchmark-na' : cached ? '' : 'benchmark-empty'}`}
