@@ -308,141 +308,245 @@
   letter-spacing: 0.04em;
 }
 
-/* Method Cards Styling */
-.method-card {
-  background-color: rgba(24, 22, 50, 0.74);
-  border: 1px solid rgba(233, 233, 233, 0.2);
-  border-radius: 7px;
-  transition: all 0.3s ease;
+/* ── Method Pill Grid — two independent flex columns so expanding one
+      does not affect the height of anything in the other column ── */
+.mpill-grid {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
 }
 
-.method-card:hover {
-  border-color: rgba(233, 233, 233, 0.4);
-  box-shadow: 0 2px 10px rgba(233, 233, 233, 0.12);
-  transform: translateY(-1px);
-}
-
-.method-card-body {
-  padding: 0.8rem;
+.mpill-col {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.55rem;
+  gap: 0.45rem;
 }
 
-.method-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 0.4rem;
+/* Pill container */
+.mpill {
+  background: rgba(24, 22, 50, 0.74);
+  border: 1px solid rgba(233, 233, 233, 0.14);
+  border-radius: 8px;
+  overflow: hidden;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-.method-title {
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--text-color);
-  line-height: 1.25;
-  margin: 0;
+.mpill:hover {
+  border-color: rgba(233, 233, 233, 0.26);
 }
 
-.github-link {
-  color: rgba(255, 255, 255, 0.6);
-  transition: color 0.2s ease, transform 0.2s ease;
-  text-decoration: none;
+.mpill--open {
+  border-color: rgba(195, 178, 255, 0.38);
+  box-shadow: 0 2px 14px rgba(160, 130, 255, 0.08);
+}
+
+/* Header — click target, always visible */
+.mpill-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0.52rem 0.78rem;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  gap: 0.55rem;
+  min-height: 44px;
+  text-align: left;
+  transition: background 0.15s ease;
+}
+
+.mpill-header:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.mpill--open .mpill-header {
+  background: rgba(195, 178, 255, 0.04);
+}
+
+.mpill-header:focus-visible {
+  outline: 2px solid rgba(195, 178, 255, 0.45);
+  outline-offset: -2px;
+  border-radius: 7px;
+}
+
+/* Method name — flex child so it's always truly vertically centred */
+.mpill-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Right cluster: chips + chevron */
+.mpill-right {
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
   flex-shrink: 0;
 }
 
-.github-link:hover {
-  color: rgba(255, 255, 255, 0.95);
-  transform: translateY(-1px);
+.mpill-chips {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
 }
 
-.method-publication {
+/* Chips — inline-flex to kill baseline quirks */
+.mpill-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.64rem;
+  line-height: 1;
+  padding: 0.18rem 0.36rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  color: rgba(255, 255, 255, 0.78);
+  background: rgba(255, 255, 255, 0.05);
+  white-space: nowrap;
+}
+
+/* Chevron — block so it never participates in baseline alignment */
+.mpill-chevron {
+  display: block;
+  color: rgba(255, 255, 255, 0.38);
+  transition: transform 0.24s ease, color 0.18s ease;
+  flex-shrink: 0;
+}
+
+.mpill--open .mpill-chevron {
+  transform: rotate(180deg);
+  color: rgba(195, 178, 255, 0.65);
+}
+
+/* ── Expandable body ── */
+.mpill-body {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.32s ease;
+}
+
+.mpill--open .mpill-body {
+  max-height: 400px;
+}
+
+.mpill-body-inner {
+  opacity: 0;
+  transition: opacity 0.16s ease;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.42rem;
+  padding: 0.7rem 0.85rem 0.8rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
 }
 
-.publication-link {
-  text-decoration: none;
+.mpill--open .mpill-body-inner {
+  opacity: 1;
+  transition: opacity 0.22s ease 0.07s;
+}
+
+/* Publication title / link */
+.mpill-pub {
+  display: flex;
+  align-items: flex-start;
+}
+
+.mpill-pub-link {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.28rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  line-height: 1.35;
   color: rgba(195, 178, 255, 0.88);
-  transition: color 0.2s ease;
+  text-decoration: none;
+  transition: color 0.18s ease;
 }
 
-.publication-link:hover {
+.mpill-pub-link:hover {
   color: #d8c8ff;
   text-decoration: underline;
 }
 
-.publication-title {
+.mpill-ext-icon {
+  flex-shrink: 0;
+  opacity: 0.6;
+  position: relative;
+  top: -1px;
+}
+
+.mpill-pub-title {
   font-size: 0.78rem;
   font-weight: 500;
-  line-height: 1.25;
-}
-
-.method-authors {
-  font-size: 0.72rem;
-  color: rgba(255, 255, 255, 0.56);
-  line-height: 1.3;
-}
-
-.method-note {
-  font-size: 0.74rem;
   line-height: 1.35;
   color: rgba(255, 255, 255, 0.72);
 }
 
-.method-note-label {
-  color: rgba(255, 255, 255, 0.92);
-  font-weight: 500;
+/* Authors */
+.mpill-authors {
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.44);
+  line-height: 1.4;
+  margin: 0;
 }
 
-.method-targets {
+/* Note — left-accent style */
+.mpill-note {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.45rem;
-  margin-top: auto;
-  padding-top: 0.25rem;
+  align-items: baseline;
+  gap: 0.38rem;
+  font-size: 0.73rem;
+  color: rgba(255, 255, 255, 0.62);
+  line-height: 1.4;
+  margin: 0;
+  padding: 0.3rem 0.5rem;
+  background: rgba(255, 255, 255, 0.03);
+  border-left: 2px solid rgba(195, 178, 255, 0.28);
+  border-radius: 0 3px 3px 0;
 }
 
-.method-targets-label {
-  font-size: 0.68rem;
+.mpill-note-kw {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.62rem;
+  font-weight: 700;
   letter-spacing: 0.07em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.6);
+  color: rgba(195, 178, 255, 0.7);
   flex-shrink: 0;
+  line-height: 1;
 }
 
-.method-target-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-  justify-content: flex-end;
+/* GitHub link */
+.mpill-github {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  font-size: 0.71rem;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.38);
+  text-decoration: none;
+  transition: color 0.18s ease;
+  width: fit-content;
 }
 
-.method-target-chip {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-size: 0.69rem;
-  padding: 0.14rem 0.34rem;
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  border-radius: 4px;
-  color: rgba(255, 255, 255, 0.88);
-  background: rgba(255, 255, 255, 0.05);
+.mpill-github:hover {
+  color: rgba(255, 255, 255, 0.8);
 }
 
-@media (max-width: 576px) {
-  .method-card-body {
-    padding: 0.75rem;
-  }
-
-  .method-targets {
-    align-items: flex-start;
+@media (max-width: 600px) {
+  .mpill-grid {
     flex-direction: column;
-  }
-
-  .method-target-list {
-    justify-content: flex-start;
   }
 }

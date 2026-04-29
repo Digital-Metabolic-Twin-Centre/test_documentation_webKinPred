@@ -674,31 +674,28 @@
 [data-theme="light"] .benchmark-empty  { color: rgba(28, 20, 67, 0.28) !important; }
 [data-theme="light"] .benchmark-na     { color: rgba(28, 20, 67, 0.4) !important; }
 
-/* Method cards */
-[data-theme="light"] .method-card {
-  background-color: rgba(255, 255, 255, 0.9);
-  border-color: rgba(110, 90, 200, 0.18);
+/* Method pills */
+[data-theme="light"] .mpill {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(110, 90, 200, 0.16);
 }
-
-[data-theme="light"] .method-card:hover {
-  border-color: rgba(110, 90, 200, 0.38);
-  box-shadow: 0 2px 10px rgba(110, 90, 200, 0.1);
-}
-
-[data-theme="light"] .github-link        { color: rgba(28, 20, 67, 0.52); }
-[data-theme="light"] .github-link:hover  { color: rgba(28, 20, 67, 0.95); }
-[data-theme="light"] .publication-link        { color: #4835b4; }
-[data-theme="light"] .publication-link:hover  { color: #1c1443; text-decoration: underline; }
-[data-theme="light"] .method-authors     { color: rgba(28, 20, 67, 0.56); }
-[data-theme="light"] .method-note        { color: rgba(28, 20, 67, 0.72); }
-[data-theme="light"] .method-note-label  { color: rgba(28, 20, 67, 0.92); }
-[data-theme="light"] .method-targets-label { color: rgba(28, 20, 67, 0.62); }
-
-[data-theme="light"] .method-target-chip {
-  border-color: rgba(110, 90, 200, 0.28);
-  color: rgba(28, 20, 67, 0.88);
-  background: rgba(110, 90, 200, 0.06);
-}
+[data-theme="light"] .mpill:hover            { border-color: rgba(110, 90, 200, 0.32); }
+[data-theme="light"] .mpill--open            { border-color: rgba(110, 90, 200, 0.46); box-shadow: 0 2px 14px rgba(110, 90, 200, 0.08); }
+[data-theme="light"] .mpill-header:hover     { background: rgba(110, 90, 200, 0.03); }
+[data-theme="light"] .mpill--open .mpill-header { background: rgba(110, 90, 200, 0.05); }
+[data-theme="light"] .mpill-name             { color: rgba(28, 20, 67, 0.92); }
+[data-theme="light"] .mpill-chip             { border-color: rgba(110, 90, 200, 0.26); color: rgba(28, 20, 67, 0.82); background: rgba(110, 90, 200, 0.06); }
+[data-theme="light"] .mpill-chevron          { color: rgba(28, 20, 67, 0.35); }
+[data-theme="light"] .mpill--open .mpill-chevron { color: #4835b4; }
+[data-theme="light"] .mpill-body-inner       { border-top-color: rgba(28, 20, 67, 0.08); }
+[data-theme="light"] .mpill-pub-link         { color: #4835b4; }
+[data-theme="light"] .mpill-pub-link:hover   { color: #1c1443; }
+[data-theme="light"] .mpill-pub-title        { color: rgba(28, 20, 67, 0.72); }
+[data-theme="light"] .mpill-authors          { color: rgba(28, 20, 67, 0.48); }
+[data-theme="light"] .mpill-note             { color: rgba(28, 20, 67, 0.65); background: rgba(110, 90, 200, 0.03); border-left-color: rgba(110, 90, 200, 0.3); }
+[data-theme="light"] .mpill-note-kw          { color: #4835b4; }
+[data-theme="light"] .mpill-github           { color: rgba(28, 20, 67, 0.4); }
+[data-theme="light"] .mpill-github:hover     { color: rgba(28, 20, 67, 0.85); }
 
 /* ═══════════════════════════════════════════════════════════
    14. LIVE LOG OVERLAY

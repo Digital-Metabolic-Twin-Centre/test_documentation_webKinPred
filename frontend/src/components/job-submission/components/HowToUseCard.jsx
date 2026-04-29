@@ -1,14 +1,26 @@
 // src/components/HowToUseCard.js
 
+import { useState } from 'react';
 import { Card, Row, Col, Alert, Button } from 'react-bootstrap';
-import { BoxArrowInDown, Bullseye, CloudUpload, Cpu, Github } from 'react-bootstrap-icons';
+import { BoxArrowInDown, Bullseye, CloudUpload, Cpu, Github, ChevronDown, BoxArrowUpRight } from 'react-bootstrap-icons';
 import '../../../styles/components/HowToUseCard.css';
 
 
 export default function HowToUseCard({ methods = {} }) {
+  const [openKeys, setOpenKeys] = useState(new Set());
+
+  const toggle = (key) => setOpenKeys(prev => {
+    const next = new Set(prev);
+    next.has(key) ? next.delete(key) : next.add(key);
+    return next;
+  });
+
   const methodEntries = Object.entries(methods).sort(([, a], [, b]) =>
     (a.displayName || '').localeCompare(b.displayName || '')
   );
+  const cols = [[], [], []];
+  methodEntries.forEach((entry, i) => cols[i % 3].push(entry));
+
   const targetLabel = {
     kcat: 'kcat',
     Km: 'Km',
@@ -51,67 +63,84 @@ export default function HowToUseCard({ methods = {} }) {
 
         <hr className="my-4" />
 
-        <h4 className="text-center mb-4">Available Predictors</h4>
-        <Row className="g-2 method-cards-grid">
-          {methodEntries.map(([key, details]) => (
-            <Col key={key} xs={12} sm={6} lg={4} xl={3}>
-              <Card className="method-card h-100">
-                <Card.Body className="method-card-body">
-                  <div className="method-head">
-                    <Card.Title className="method-title mb-0">{details.displayName}</Card.Title>
-                    {details.repoUrl && (
-                      <a
-                        href={details.repoUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="github-link"
-                        title="View on GitHub"
-                      >
-                        <Github size={18} />
-                      </a>
-                    )}
-                  </div>
+        <h4 className="text-center mb-3">Available Predictors</h4>
+        <div className="mpill-grid">
+          {cols.map((col, ci) => (
+            <div key={ci} className="mpill-col">
+              {col.map(([key, details]) => {
+                const isOpen = openKeys.has(key);
+                return (
+                  <div key={key} className={`mpill${isOpen ? ' mpill--open' : ''}`}>
+                    <button
+                      type="button"
+                      className="mpill-header"
+                      onClick={() => toggle(key)}
+                      aria-expanded={isOpen}
+                    >
+                      <span className="mpill-name">{details.displayName}</span>
+                      <div className="mpill-right">
+                        <div className="mpill-chips">
+                          {(details.supports || []).map((target) => (
+                            <span key={target} className="mpill-chip">
+                              {targetLabel[target] || target}
+                            </span>
+                          ))}
+                        </div>
+                        <ChevronDown size={13} className="mpill-chevron" />
+                      </div>
+                    </button>
 
-                  <div className="method-publication">
-                    {details.citationUrl ? (
-                      <a
-                        href={details.citationUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="publication-link"
-                      >
-                        <span className="publication-title">{details.publicationTitle}</span>
-                      </a>
-                    ) : (
-                      <span className="publication-title">{details.publicationTitle}</span>
-                    )}
-                    {details.authors && (
-                      <small className="method-authors">{details.authors}</small>
-                    )}
-                  </div>
+                    <div className="mpill-body">
+                      <div className="mpill-body-inner">
+                        <div className="mpill-pub">
+                          {details.citationUrl ? (
+                            <a
+                              href={details.citationUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="mpill-pub-link"
+                            >
+                              {details.publicationTitle}
+                              <BoxArrowUpRight size={10} className="mpill-ext-icon" />
+                            </a>
+                          ) : (
+                            <span className="mpill-pub-title">{details.publicationTitle}</span>
+                          )}
+                        </div>
 
-                  {details.moreInfo && (
-                    <div className="method-note">
-                      <span className="method-note-label">Note:</span> {details.moreInfo}
+                        {details.authors && (
+                          <p className="mpill-authors">{details.authors}</p>
+                        )}
+
+                        {details.moreInfo && (
+                          <p className="mpill-note">
+                            <span className="mpill-note-kw">Note</span>
+                            {details.moreInfo}
+                          </p>
+                        )}
+
+                        {details.repoUrl && (
+                          <a
+                            href={details.repoUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mpill-github"
+                          >
+                            <Github size={13} />
+                            View on GitHub
+                          </a>
+                        )}
+                      </div>
                     </div>
-                  )}
-
-                  <div className="method-targets">
-                    <span className="method-targets-label">Predicts</span>
-                    <div className="method-target-list">
-                      {(details.supports || []).map((target) => (
-                        <span key={`${key}-${target}`} className="method-target-chip">
-                          {targetLabel[target] || target}
-                        </span>
-                      ))}
-                    </div>
                   </div>
-                </Card.Body>
-              </Card>
-            </Col>
+                );
+              })}
+            </div>
           ))}
-        </Row>
-        <h4 className="text-center mb-3 mt-2">Input Data Format</h4>
+        </div>
+
+        <hr className="my-4" />
+        <h4 className="text-center mb-3">Input Data Format</h4>
         <p className="fmtt-subtitle">Required CSV columns for each format</p>
         <div className="fmttable">
           {/* Column headers */}
