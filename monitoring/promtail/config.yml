@@ -20,6 +20,7 @@ scrape_configs:
       - docker: {}
       - json:
           expressions:
+            service: service
             level: level
             event: event
             job_public_id: job_public_id
@@ -27,6 +28,7 @@ scrape_configs:
             method_key: method_key
             target: target
       - labels:
+          service:
           level:
           event:
           job_public_id:
