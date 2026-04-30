@@ -70,6 +70,26 @@ GRAFANA_ADMIN_USER=admin GRAFANA_ADMIN_PASSWORD='change-me' docker compose -f do
 
 Promtail reads Docker container logs, parses the JSON payload, and labels logs with `service`, `level`, `event`, `job_public_id`, `celery_task_id`, `method_key`, and `target`.
 
+If your host Docker daemon rejects Promtail Docker API discovery (for example API version mismatch), webKinPred uses file-based scraping from `/var/lib/docker/containers/*/*-json.log`.
+
+After updating Promtail config, force recreate the Promtail container so it remounts the latest host file:
+
+```bash
+docker compose -f docker-compose.prod.yml rm -sf promtail
+docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate promtail
+```
+
+Then verify the container sees the updated config:
+
+```bash
+docker compose -f docker-compose.prod.yml exec -T promtail \
+  sh -lc 'grep -n "job_name" /etc/promtail/config.yml && grep -n "docker_sd_configs" /etc/promtail/config.yml || true'
+```
+
+Expected:
+- `job_name: docker-file-logs`
+- no `docker_sd_configs` block
+
 ## Common LogQL Queries
 
 All logs for a job:
