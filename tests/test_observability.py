@@ -53,6 +53,35 @@ class ObservabilityFormatterTests(unittest.TestCase):
             reset_log_context(token)
         self.assertNotIn("request_id", get_log_context())
 
+    def test_celery_received_log_infers_run_multi_prediction_context(self):
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        handler.addFilter(CorrelationFilter())
+        handler.setFormatter(JsonLogFormatter())
+
+        logger = logging.getLogger("tests.observability.celery_received")
+        logger.handlers = [handler]
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+
+        logger.info(
+            "Task api.tasks.run_multi_prediction[task-1] received",
+            extra={
+                "data": {
+                    "id": "task-1",
+                    "name": "api.tasks.run_multi_prediction",
+                    "args": "('job-1', ['kcat'], {'kcat': 'TurNup'}, {}, True, True, False)",
+                    "kwargs": "{}",
+                }
+            },
+        )
+
+        payload = json.loads(stream.getvalue())
+        self.assertEqual(payload["job_public_id"], "job-1")
+        self.assertEqual(payload["celery_task_id"], "task-1")
+        self.assertEqual(payload["method_key"], "TurNup")
+        self.assertEqual(payload["target"], "kcat")
+
 
 class RequestIDMiddlewareTests(unittest.TestCase):
     def test_generates_and_returns_request_id(self):
@@ -72,6 +101,36 @@ class RequestIDMiddlewareTests(unittest.TestCase):
 
 
 class CelerySignalLoggingTests(unittest.TestCase):
+    def test_run_multi_prediction_context_from_args(self):
+        from api.observability import celery_signals
+
+        task = SimpleNamespace(name="api.tasks.run_multi_prediction", request=SimpleNamespace())
+        context = celery_signals._task_context(
+            task,
+            "task-1",
+            ("job-1", ["kcat"], {"kcat": "TurNup"}, {}, True, True, False),
+            {},
+        )
+
+        self.assertEqual(context["job_public_id"], "job-1")
+        self.assertEqual(context["celery_task_id"], "task-1")
+        self.assertEqual(context["method_key"], "TurNup")
+        self.assertEqual(context["target"], "kcat")
+
+    def test_run_multi_prediction_context_compacts_multiple_targets(self):
+        from api.observability import celery_signals
+
+        task = SimpleNamespace(name="api.tasks.run_multi_prediction", request=SimpleNamespace())
+        context = celery_signals._task_context(
+            task,
+            "task-1",
+            ("job-1", ["kcat", "Km"], {"kcat": "TurNup", "Km": "UniKP"}),
+            {},
+        )
+
+        self.assertEqual(context["method_key"], "TurNup,UniKP")
+        self.assertEqual(context["target"], "kcat,Km")
+
     def test_task_lifecycle_logs_context(self):
         from api.observability import celery_signals
 

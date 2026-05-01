@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pickle
+import inspect
 from argparse import Namespace
 
 import numpy as np
@@ -71,6 +72,18 @@ def _torch_load_compat(path, map_location=None):
             return torch.load(path, map_location=map_location)
 
 
+def _load_model_and_alphabet_core_compat(model_name, model_data, regression_data):
+    core_loader = esm.pretrained.load_model_and_alphabet_core
+    try:
+        first_param = next(iter(inspect.signature(core_loader).parameters), None)
+    except (TypeError, ValueError):
+        first_param = None
+
+    if first_param == "model_name":
+        return core_loader(model_name, model_data, regression_data)
+    return core_loader(model_data, regression_data)
+
+
 def resolve_seq_ids_via_cli(sequences):
     """Resolve IDs for all sequences in order (increments uses_count per occurrence)."""
     payload = "\n".join(sequences) + "\n"
@@ -103,8 +116,8 @@ def load_esm1b_model():
     model_data = _torch_load_compat(model_location, map_location="cpu")
     regression_location = model_location[:-3] + "-contact-regression.pt"
     regression_data = _torch_load_compat(regression_location, map_location="cpu")
-    model, alphabet = esm.pretrained.load_model_and_alphabet_core(
-        model_data, regression_data
+    model, alphabet = _load_model_and_alphabet_core_compat(
+        "esm1b_t33_650M_UR50S", model_data, regression_data
     )
     model.eval()
 
