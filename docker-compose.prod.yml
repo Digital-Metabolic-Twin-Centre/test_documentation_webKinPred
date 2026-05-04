@@ -69,7 +69,7 @@ services:
       sh -c "python manage.py migrate &&
              python manage.py migrate --database=seqmap &&
              python manage.py collectstatic --noinput --clear &&
-             gunicorn webKinPred.wsgi:application --bind 0.0.0.0:8000 --workers 2 --worker-class sync --timeout 300 --graceful-timeout 30 --access-logfile /dev/null --error-logfile - --capture-output"
+             gunicorn webKinPred.wsgi:application --bind 0.0.0.0:8000 --workers 4 --worker-class sync --timeout 300 --graceful-timeout 30 --access-logfile /dev/null --error-logfile - --capture-output"
 
   # ── Frontend (nginx + React SPA) ────────────────────────────────────────────
   frontend:
