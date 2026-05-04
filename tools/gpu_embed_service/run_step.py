@@ -592,7 +592,7 @@ def run_step(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run one GPU embedding step for a seq-id batch.")
     parser.add_argument("--step", required=True, choices=STEP_CHOICES)
-    parser.add_argument("--seq-ids", required=True, help="Comma-separated sequence IDs")
+    parser.add_argument("--seq-ids", default="", help="Comma-separated sequence IDs (omit when --seq-id-to-seq-file is provided)")
     parser.add_argument("--repo-root", default=os.environ.get("GPU_EMBED_REPO_ROOT", ""))
     parser.add_argument("--media-path", default=os.environ.get("KINFORM_MEDIA_PATH", ""))
     parser.add_argument("--tools-path", default=os.environ.get("KINFORM_TOOLS_PATH", ""))
@@ -612,13 +612,15 @@ def main() -> int:
     repo_root = Path(args.repo_root).resolve() if args.repo_root else _default_repo_root().resolve()
     media_path = Path(args.media_path).resolve() if args.media_path else Path("/mnt/webkinpred/media").resolve()
     tools_path = Path(args.tools_path).resolve() if args.tools_path else (repo_root / "tools").resolve()
-    seq_ids = _parse_seq_ids(args.seq_ids)
-
     seq_id_to_seq: dict[str, str] | None = None
     if args.seq_id_to_seq_file:
         seq_id_to_seq = json.loads(Path(args.seq_id_to_seq_file).read_text(encoding="utf-8"))
+        seq_ids = _parse_seq_ids(args.seq_ids) if args.seq_ids else list(seq_id_to_seq.keys())
     elif args.seq_id_to_seq_json:
         seq_id_to_seq = json.loads(args.seq_id_to_seq_json)
+        seq_ids = _parse_seq_ids(args.seq_ids)
+    else:
+        seq_ids = _parse_seq_ids(args.seq_ids)
 
     run_step(
         step=args.step,

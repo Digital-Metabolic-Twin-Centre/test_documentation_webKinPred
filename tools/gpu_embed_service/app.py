@@ -334,8 +334,6 @@ def _execute_step(
                 str((_HERE / "run_step.py").resolve()),
                 "--step",
                 step_key,
-                "--seq-ids",
-                ",".join(seq_ids),
                 "--repo-root",
                 str(repo_root),
                 "--media-path",
