@@ -78,6 +78,19 @@ def _env_float(name: str, default: float) -> float:
         return float(default)
 
 
+def _pseq_retry_batch_plan(env: dict[str, str]) -> list[int]:
+    """
+    Build pseq retry batch sizes from the configured starting batch size.
+    Example: start=8 -> [8, 4, 2, 1].
+    """
+    start = max(1, int(_env_float("KINFORM_PARALLEL_PSEQ_STREAM_BATCH_SIZE", 8.0)))
+    plan = [start]
+    for candidate in (4, 2, 1):
+        if candidate < start and candidate not in plan:
+            plan.append(candidate)
+    return plan
+
+
 def _log_level_value(name: str) -> int:
     mapping = {
         "debug": 10,
@@ -534,6 +547,7 @@ class WorkerState:
     elapsed_seconds_total: float = 0.0
     stream_done_received: bool = False
     waiting_for_stream_done_since: float | None = None
+    pseq_batch_size: int | None = None
 
     def running(self) -> bool:
         return self.process is not None and self.process.poll() is None
@@ -878,6 +892,7 @@ def _run_kinform_parallel_pipeline_file_polling(
         / "pseq2sites"
         / "pseq2sites_stream_worker.py"
     ).resolve()
+    pseq_retry_plan = _pseq_retry_batch_plan(env)
 
     workers: dict[str, WorkerState] = {
         _T5_FAMILY: WorkerState(name=_T5_FAMILY),
@@ -897,7 +912,15 @@ def _run_kinform_parallel_pipeline_file_polling(
             return _needs_pseq_worker_seq_ids(targets=targets, bs_scores=bs_scores)
         return set()
 
-    def build_cmd(worker_name: str, seq_subset: dict[str, str], seq_file: Path, id_to_seq_pkl: Path, seq_map_json: Path) -> list[str]:
+    def build_cmd(
+        worker_name: str,
+        seq_subset: dict[str, str],
+        seq_file: Path,
+        id_to_seq_pkl: Path,
+        seq_map_json: Path,
+        *,
+        pseq_batch_size: int | None = None,
+    ) -> list[str]:
         if worker_name == _T5_FAMILY:
             return [
                 env["KINFORM_T5_PATH"],
@@ -951,6 +974,8 @@ def _run_kinform_parallel_pipeline_file_polling(
                 "1",
             ]
         if worker_name == _PSEQ_WORKER:
+            if pseq_batch_size is None:
+                pseq_batch_size = pseq_retry_plan[0]
             return [
                 env["KINFORM_PSEQ2SITES_PATH"],
                 str(pseq_stream_script),
@@ -961,7 +986,7 @@ def _run_kinform_parallel_pipeline_file_polling(
                 "--poll-interval-seconds",
                 "0.5",
                 "--batch-size",
-                "8",
+                str(max(1, int(pseq_batch_size))),
             ]
         raise RuntimeError(f"Unknown KinForm worker '{worker_name}'.")
 
@@ -970,21 +995,39 @@ def _run_kinform_parallel_pipeline_file_polling(
         seq_ids_to_run = needed_ids(worker_name, bs_scores)
         if not seq_ids_to_run:
             return False
-        if state.attempts >= 2:
+        max_attempts = len(pseq_retry_plan) if worker_name == _PSEQ_WORKER else 2
+        if state.attempts >= max_attempts:
             raise RuntimeError(
                 f"{worker_name} exhausted retries with remaining seq_ids={sorted(seq_ids_to_run)}"
             )
         seq_subset = _to_seq_subset(seq_id_to_seq, seq_ids_to_run)
         seq_file, id_to_seq_pkl, seq_map_json = _write_worker_inputs(seq_subset)
         state.tmp_inputs_dir = seq_file.parent
-        cmd = build_cmd(worker_name, seq_subset, seq_file, id_to_seq_pkl, seq_map_json)
+        pseq_batch_size = (
+            pseq_retry_plan[state.attempts] if worker_name == _PSEQ_WORKER else None
+        )
+        cmd = build_cmd(
+            worker_name,
+            seq_subset,
+            seq_file,
+            id_to_seq_pkl,
+            seq_map_json,
+            pseq_batch_size=pseq_batch_size,
+        )
         state.process = _start_worker(cmd, env)
         state.active_seq_ids = set(seq_ids_to_run)
+        state.pseq_batch_size = pseq_batch_size
         state.attempts += 1
+        pseq_batch_msg = (
+            f" pseq_batch_size={pseq_batch_size}" if worker_name == _PSEQ_WORKER else ""
+        )
         _log(
             env,
             "info",
-            f"launched worker={worker_name} attempt={state.attempts} seq_count={len(seq_ids_to_run)}",
+            (
+                f"launched worker={worker_name} attempt={state.attempts} "
+                f"seq_count={len(seq_ids_to_run)}{pseq_batch_msg}"
+            ),
             job_id=job_id,
         )
         return True
@@ -1016,7 +1059,8 @@ def _run_kinform_parallel_pipeline_file_polling(
                 f"worker={worker_name} exited but artifacts still missing; remaining_seq_count={len(remaining)}",
                 job_id=job_id,
             )
-        if remaining and state.attempts < 2:
+        max_attempts = len(pseq_retry_plan) if worker_name == _PSEQ_WORKER else 2
+        if remaining and state.attempts < max_attempts:
             launch_worker(worker_name, bs_scores)
             return True
         if remaining:
@@ -1276,6 +1320,7 @@ def _run_kinform_parallel_pipeline_stream(
         / "pseq2sites"
         / "pseq2sites_stream_worker.py"
     ).resolve()
+    pseq_retry_plan = _pseq_retry_batch_plan(env)
 
     workers: dict[str, WorkerState] = {
         _T5_FAMILY: WorkerState(name=_T5_FAMILY),
@@ -1449,7 +1494,15 @@ def _run_kinform_parallel_pipeline_stream(
                 out.add(sid)
         return out
 
-    def build_cmd(worker_name: str, seq_subset: dict[str, str], seq_file: Path, id_to_seq_pkl: Path, seq_map_json: Path) -> list[str]:
+    def build_cmd(
+        worker_name: str,
+        seq_subset: dict[str, str],
+        seq_file: Path,
+        id_to_seq_pkl: Path,
+        seq_map_json: Path,
+        *,
+        pseq_batch_size: int | None = None,
+    ) -> list[str]:
         common_stream = [
             "--stream-mode",
             "--stream-socket",
@@ -1518,7 +1571,8 @@ def _run_kinform_parallel_pipeline_stream(
                 *common_stream,
             ]
         if worker_name == _PSEQ_WORKER:
-            batch_size = int(_env_float("KINFORM_PARALLEL_PSEQ_STREAM_BATCH_SIZE", 8.0))
+            if pseq_batch_size is None:
+                pseq_batch_size = pseq_retry_plan[0]
             return [
                 env["KINFORM_PSEQ2SITES_PATH"],
                 str(pseq_stream_script),
@@ -1527,7 +1581,7 @@ def _run_kinform_parallel_pipeline_stream(
                 "--binding-sites-path",
                 str(binding_sites_path),
                 "--batch-size",
-                str(max(1, batch_size)),
+                str(max(1, int(pseq_batch_size))),
                 "--stream-mode",
                 "--stream-socket",
                 str(socket_path),
@@ -1543,29 +1597,47 @@ def _run_kinform_parallel_pipeline_stream(
         seq_ids_to_run = needed_ids(worker_name)
         if not seq_ids_to_run:
             return False
-        if state.attempts >= 2:
+        max_attempts = len(pseq_retry_plan) if worker_name == _PSEQ_WORKER else 2
+        if state.attempts >= max_attempts:
             raise RuntimeError(
                 f"{worker_name} exhausted retries with remaining seq_ids={sorted(seq_ids_to_run)}"
             )
         seq_subset = _to_seq_subset(seq_id_to_seq, seq_ids_to_run)
         seq_file, id_to_seq_pkl, seq_map_json = _write_worker_inputs(seq_subset)
         state.tmp_inputs_dir = seq_file.parent
-        cmd = build_cmd(worker_name, seq_subset, seq_file, id_to_seq_pkl, seq_map_json)
+        pseq_batch_size = (
+            pseq_retry_plan[state.attempts] if worker_name == _PSEQ_WORKER else None
+        )
+        cmd = build_cmd(
+            worker_name,
+            seq_subset,
+            seq_file,
+            id_to_seq_pkl,
+            seq_map_json,
+            pseq_batch_size=pseq_batch_size,
+        )
         state.process = _start_worker(cmd, env)
         state.active_seq_ids = set(seq_ids_to_run)
         state.active_seq_count = len(seq_ids_to_run)
         state.started_at_monotonic = time.monotonic()
         state.stream_done_received = False
         state.waiting_for_stream_done_since = None
+        state.pseq_batch_size = pseq_batch_size
         if worker_name == _PSEQ_WORKER:
             # New Pseq2Sites process needs fresh residue dispatch for any unresolved IDs.
             set_pseq_client_id(None)
             reset_pseq_send_state()
         state.attempts += 1
+        pseq_batch_msg = (
+            f" pseq_batch_size={pseq_batch_size}" if worker_name == _PSEQ_WORKER else ""
+        )
         _log(
             env,
             "info",
-            f"launched worker={worker_name} attempt={state.attempts} seq_count={len(seq_ids_to_run)}",
+            (
+                f"launched worker={worker_name} attempt={state.attempts} "
+                f"seq_count={len(seq_ids_to_run)}{pseq_batch_msg}"
+            ),
             job_id=job_id,
         )
         return True
@@ -1644,7 +1716,8 @@ def _run_kinform_parallel_pipeline_stream(
                 job_id=job_id,
             )
 
-        if remaining and state.attempts < 2:
+        max_attempts = len(pseq_retry_plan) if worker_name == _PSEQ_WORKER else 2
+        if remaining and state.attempts < max_attempts:
             launch_worker(worker_name)
             return True
 
