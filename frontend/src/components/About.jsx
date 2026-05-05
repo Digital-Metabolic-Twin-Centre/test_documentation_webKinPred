@@ -40,7 +40,7 @@ const teamInstitutions = [
     members: ['Zechen Wang'],
   },
   {
-    institution: 'AG Töpfer, Department of Biology, University of Cologne',
+    institution: 'Töpfer Lab, Institute for Plant Sciences, University of Cologne',
     location: 'Cologne, Germany',
     members: ['Nadine Töpfer', 'Jan-Niklas Weder', 'Karim Taha'],
   },
