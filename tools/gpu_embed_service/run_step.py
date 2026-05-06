@@ -478,6 +478,14 @@ def _run_catpred_embed(env: dict[str, str], seq_map_json: Path, *, parameter: st
         )
     ).resolve()
     cache_root = (Path(env["KINFORM_MEDIA_PATH"]) / "sequence_info" / "catpred_esm2").resolve()
+    # CatPred secure deserialization requires checkpoint paths to be under trusted roots.
+    # Extend (do not replace) any existing trust roots with the configured checkpoint root.
+    trusted_roots_var = "CATPRED_TRUSTED_DESERIALIZATION_ROOTS"
+    existing_roots = [p for p in str(env.get(trusted_roots_var, "")).split(os.pathsep) if p.strip()]
+    checkpoint_root_str = str(checkpoint_root)
+    if checkpoint_root_str not in existing_roots:
+        existing_roots.append(checkpoint_root_str)
+    env[trusted_roots_var] = os.pathsep.join(existing_roots)
 
     _run(
         [
