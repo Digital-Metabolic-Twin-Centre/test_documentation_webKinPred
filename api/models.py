@@ -218,3 +218,27 @@ class ApiKey(models.Model):
     def key_prefix(self):
         """Returns only the first 10 characters for safe display in the admin."""
         return self.key[:10] + "…"
+
+
+class AboutStatsCache(models.Model):
+    """
+    Persistent cache for the About-page metrics payload.
+
+    A singleton-style row keyed by ``key='about_stats'`` is used by
+    ``api.services.about_stats_service``.
+    """
+
+    key = models.CharField(max_length=64, unique=True)
+    payload = models.TextField(blank=True, default="")
+    generated_at = models.DateTimeField(null=True, blank=True)
+    is_stale = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+        verbose_name = "About Stats Cache"
+        verbose_name_plural = "About Stats Cache"
+
+    def __str__(self):
+        state = "stale" if self.is_stale else "fresh"
+        return f"{self.key} [{state}]"

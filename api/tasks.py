@@ -45,6 +45,7 @@ from api.services.job_progress_service import (
     set_stage_prediction_snapshot,
 )
 from api.services.similarity_service import append_kcat_similarity_columns_to_output_csv
+from api.services.about_stats_service import refresh_about_stats_cache
 from api.utils.extra_info import _source, build_extra_info
 from api.utils.handle_long import get_valid_indices, truncate_sequences
 from api.utils.job_utils import canonicalise_targets
@@ -69,6 +70,14 @@ def _safe_clear_gpu_precompute_status(public_id: str) -> None:
         clear_gpu_precompute_status(public_id)
     except Exception:
         # Redis telemetry cleanup is best-effort only.
+        pass
+
+
+def _safe_refresh_about_stats_cache() -> None:
+    try:
+        refresh_about_stats_cache(force=True)
+    except Exception:
+        # About stats are non-critical and should never break jobs.
         pass
 
 
@@ -120,6 +129,7 @@ def run_prediction(
             status="Completed",
             completion_time=timezone.now(),
         )
+        _safe_refresh_about_stats_cache()
 
     except PredictionError as e:
         Job.objects.filter(pk=job.pk).update(
@@ -190,6 +200,7 @@ def run_both_prediction(
             status="Completed",
             completion_time=timezone.now(),
         )
+        _safe_refresh_about_stats_cache()
 
     except PredictionError as e:
         Job.objects.filter(pk=job.pk).update(
@@ -279,6 +290,7 @@ def run_multi_prediction(
             status="Completed",
             completion_time=timezone.now(),
         )
+        _safe_refresh_about_stats_cache()
 
     except PredictionError as e:
         mark_running_stage_failed(public_id, message=str(e))

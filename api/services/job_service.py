@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional, Tuple
 from django.http import JsonResponse
 
 from api.models import Job
+from api.services.about_stats_service import mark_about_stats_cache_stale
 from api.tasks import run_multi_prediction
 from api.utils.job_utils import (
     canonical_prediction_type,
@@ -159,6 +160,8 @@ def process_job_submission_from_params(
     )
 
     job = create_job_record(params, ip_address, len(dataframe), user)
+    # New jobs can affect About-page totals once processed; mark cache stale.
+    mark_about_stats_cache_stale()
 
     job_dir = create_job_directory(job.public_id)
     save_job_input_file(file, job_dir)

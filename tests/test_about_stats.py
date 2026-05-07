@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("DJANGO_SECRET_KEY", "test-secret-key")
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "webKinPred.settings")
@@ -40,6 +40,17 @@ class _FakeCompletedJobs:
         return self._total_count
 
 
+class _FakeCacheRow:
+    def __init__(self, payload: str = "", is_stale: bool = True):
+        self.payload = payload
+        self.is_stale = is_stale
+        self.generated_at = None
+        self.saved = []
+
+    def save(self, update_fields=None):
+        self.saved.append(tuple(update_fields or ()))
+
+
 class AboutStatsServiceTests(unittest.TestCase):
     def _import_service_or_skip(self):
         try:
@@ -49,10 +60,6 @@ class AboutStatsServiceTests(unittest.TestCase):
                 self.skipTest("Django is not installed in this Python environment.")
             raise
         return about_stats_service
-
-    def _reset_cache(self, service_module):
-        service_module._cache_payload = None
-        service_module._cache_ts = 0.0
 
     def test_compute_stats_counts_mixed_outputs_and_unique_sequences(self):
         service = self._import_service_or_skip()
@@ -100,13 +107,33 @@ class AboutStatsServiceTests(unittest.TestCase):
         self.assertEqual(payload["km_predictions_completed"], 1)
         self.assertEqual(payload["kcat_km_predictions_completed"], 2)
 
-    def test_get_about_stats_uses_ttl_cache_and_supports_force_refresh(self):
+    def test_get_about_stats_returns_fresh_cached_payload_without_recompute(self):
         service = self._import_service_or_skip()
-        self._reset_cache(service)
-
-        payload_a = {
+        cached = {
             "scope": "all_time",
-            "generated_at": "first",
+            "generated_at": "cached",
+            "jobs_completed": 9,
+            "reactions_completed": 8,
+            "unique_protein_sequences": 7,
+            "kcat_predictions_completed": 6,
+            "km_predictions_completed": 5,
+            "kcat_km_predictions_completed": 4,
+        }
+        row = _FakeCacheRow(payload=json.dumps(cached), is_stale=False)
+
+        with patch.object(service, "_get_or_create_cache_row", return_value=row):
+            with patch.object(service, "refresh_about_stats_cache") as mocked_refresh:
+                payload = service.get_about_stats()
+
+        self.assertEqual(payload, cached)
+        mocked_refresh.assert_not_called()
+
+    def test_get_about_stats_recomputes_when_stale(self):
+        service = self._import_service_or_skip()
+        row = _FakeCacheRow(payload="", is_stale=True)
+        fresh = {
+            "scope": "all_time",
+            "generated_at": "fresh",
             "jobs_completed": 1,
             "reactions_completed": 2,
             "unique_protein_sequences": 3,
@@ -114,31 +141,23 @@ class AboutStatsServiceTests(unittest.TestCase):
             "km_predictions_completed": 5,
             "kcat_km_predictions_completed": 6,
         }
-        payload_b = {
-            "scope": "all_time",
-            "generated_at": "second",
-            "jobs_completed": 10,
-            "reactions_completed": 20,
-            "unique_protein_sequences": 30,
-            "kcat_predictions_completed": 40,
-            "km_predictions_completed": 50,
-            "kcat_km_predictions_completed": 60,
-        }
 
-        with patch.object(
-            service,
-            "_compute_about_stats_payload",
-            side_effect=[payload_a, payload_b],
-        ) as mocked_compute:
-            with patch.object(service.time, "monotonic", side_effect=[100.0, 100.1, 101.0]):
-                first = service.get_about_stats()
-                second = service.get_about_stats()
-                third = service.get_about_stats(force_refresh=True)
+        with patch.object(service, "_get_or_create_cache_row", return_value=row):
+            with patch.object(service, "refresh_about_stats_cache", return_value=fresh) as mocked_refresh:
+                payload = service.get_about_stats()
 
-        self.assertEqual(first["generated_at"], "first")
-        self.assertEqual(second["generated_at"], "first")
-        self.assertEqual(third["generated_at"], "second")
-        self.assertEqual(mocked_compute.call_count, 2)
+        self.assertEqual(payload, fresh)
+        mocked_refresh.assert_called_once_with(force=True)
+
+    def test_mark_about_stats_cache_stale_sets_flag(self):
+        service = self._import_service_or_skip()
+        row = _FakeCacheRow(payload="{}", is_stale=False)
+
+        with patch.object(service, "_get_or_create_cache_row", return_value=row):
+            service.mark_about_stats_cache_stale()
+
+        self.assertTrue(row.is_stale)
+        self.assertTrue(any("is_stale" in fields for fields in row.saved))
 
 
 class AboutStatsEndpointTests(unittest.TestCase):
@@ -180,6 +199,53 @@ class AboutStatsEndpointTests(unittest.TestCase):
         self.assertIsInstance(data["kcat_predictions_completed"], int)
         self.assertIsInstance(data["km_predictions_completed"], int)
         self.assertIsInstance(data["kcat_km_predictions_completed"], int)
+
+
+class JobFlowInvalidationTests(unittest.TestCase):
+    def _import_job_service_or_skip(self):
+        try:
+            from api.services import job_service
+        except ModuleNotFoundError as exc:
+            if exc.name == "django":
+                self.skipTest("Django is not installed in this Python environment.")
+            raise
+        return job_service
+
+    def test_submission_marks_about_stats_cache_stale(self):
+        job_service = self._import_job_service_or_skip()
+
+        fake_df = MagicMock()
+        fake_df.columns = ["Protein Sequence", "Substrate"]
+        fake_df.__len__.return_value = 1
+
+        params = {
+            "targets": ["kcat"],
+            "methods": {"kcat": "DLKcat"},
+            "handle_long_sequences": "truncate",
+            "use_experimental": False,
+            "include_similarity_columns": True,
+            "canonicalize_substrates": True,
+        }
+
+        with patch.object(job_service, "validate_prediction_parameters", return_value=None), \
+            patch.object(job_service, "validate_sequence_handling_option", return_value=None), \
+            patch.object(job_service, "parse_csv_file", return_value=fake_df), \
+            patch.object(job_service, "validate_required_columns_for_methods", return_value=None), \
+            patch.object(job_service, "validate_column_emptiness", return_value=None), \
+            patch.object(job_service, "handle_quota_validation", return_value=None), \
+            patch.object(job_service, "get_or_create_user", return_value=None), \
+            patch.object(job_service, "get_experimental_results", return_value=None), \
+            patch.object(job_service, "create_job_record") as mocked_create_job, \
+            patch.object(job_service, "create_job_directory", return_value="/tmp/fake"), \
+            patch.object(job_service, "save_job_input_file", return_value="/tmp/fake/input.csv"), \
+            patch.object(job_service, "dispatch_prediction_task", return_value=None), \
+            patch.object(job_service, "mark_about_stats_cache_stale") as mocked_mark_stale:
+            mocked_create_job.return_value = MagicMock(public_id="abc123")
+            error, success = job_service.process_job_submission_from_params(params, MagicMock(), "127.0.0.1")
+
+        self.assertIsNone(error)
+        self.assertEqual(success["public_id"], "abc123")
+        mocked_mark_stale.assert_called_once()
 
 
 if __name__ == "__main__":

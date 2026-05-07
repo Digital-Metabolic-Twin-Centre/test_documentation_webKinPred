@@ -82,10 +82,20 @@ const METRIC_CARDS = [
 ];
 
 const numberFormatter = new Intl.NumberFormat('en-US');
+const ABOUT_STATS_STORAGE_KEY = 'about_stats_payload_v1';
 
 const About = () => {
   const [copied, setCopied] = useState(false);
-  const [stats, setStats] = useState(null);
+  const [stats, setStats] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(ABOUT_STATS_STORAGE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+      return null;
+    }
+  });
   const citationText = "OpenKineticsPredictor: ....";
 
   useEffect(() => {
@@ -94,11 +104,17 @@ const About = () => {
     apiClient.get('/about-stats/')
       .then((response) => {
         if (!isMounted) return;
-        setStats(response.data || {});
+        const payload = response.data || {};
+        setStats(payload);
+        try {
+          window.localStorage.setItem(ABOUT_STATS_STORAGE_KEY, JSON.stringify(payload));
+        } catch {
+          // Best effort only.
+        }
       })
       .catch(() => {
         if (!isMounted) return;
-        setStats({});
+        setStats(prev => prev ?? {});
       });
 
     return () => {
