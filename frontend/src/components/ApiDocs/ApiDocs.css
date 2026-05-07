@@ -31,6 +31,93 @@
   margin-bottom: 0;
 }
 
+.about-metrics-section {
+  margin-bottom: 2rem;
+}
+
+.about-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+@media (min-width: 768px) {
+  .about-metrics-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 992px) {
+  .about-metrics-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
+.about-metric-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 0.75rem 0.9rem;
+  min-height: 88px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 0.35rem;
+}
+
+.about-metric-value {
+  font-weight: 700;
+  font-size: 1.25rem;
+  color: #ffffff;
+  line-height: 1.2;
+}
+
+.about-metric-label {
+  font-size: 0.8rem;
+  color: rgba(232, 230, 240, 0.78);
+  line-height: 1.35;
+}
+
+.about-math {
+  font-style: italic;
+  white-space: nowrap;
+}
+
+.about-math sub {
+  font-style: italic;
+  font-size: 0.74em;
+  line-height: 1;
+}
+
+.about-math-frac {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  vertical-align: middle;
+}
+
+.about-math-frac__num,
+.about-math-frac__den {
+  font-style: italic;
+  white-space: nowrap;
+  padding: 0 0.1em;
+}
+
+.about-math-frac__num {
+  border-bottom: 1px solid currentColor;
+  padding-bottom: 0.05em;
+  margin-bottom: 0.04em;
+}
+
+.about-math-frac__num sub,
+.about-math-frac__den sub {
+  font-style: italic;
+  font-size: 0.74em;
+  line-height: 1;
+}
+
 .about-institution-card {
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.1);

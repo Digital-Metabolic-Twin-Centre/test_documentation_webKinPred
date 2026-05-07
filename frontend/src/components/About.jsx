@@ -1,6 +1,7 @@
 // src/components/About.js
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button, Form } from 'react-bootstrap';
+import apiClient from './appClient';
 import './ApiDocs/ApiDocs.css';
 
 const teamInstitutions = [
@@ -46,9 +47,69 @@ const teamInstitutions = [
   },
 ];
 
+const METRIC_CARDS = [
+  { key: 'jobs_completed', label: 'Jobs processed' },
+  { key: 'reactions_completed', label: 'Rows predicted' },
+  { key: 'unique_protein_sequences', label: 'Distinct proteins' },
+  {
+    key: 'kcat_predictions_completed',
+    label: (
+      <>
+        <span className="about-math">k<sub>cat</sub></span> predictions
+      </>
+    ),
+  },
+  {
+    key: 'km_predictions_completed',
+    label: (
+      <>
+        <span className="about-math">K<sub>M</sub></span> predictions
+      </>
+    ),
+  },
+  {
+    key: 'kcat_km_predictions_completed',
+    label: (
+      <>
+        <span className="about-math-frac" aria-label="k sub cat over K sub M">
+          <span className="about-math-frac__num">k<sub>cat</sub></span>
+          <span className="about-math-frac__den">K<sub>M</sub></span>
+        </span>{' '}
+        predictions
+      </>
+    ),
+  },
+];
+
+const numberFormatter = new Intl.NumberFormat('en-US');
+
 const About = () => {
   const [copied, setCopied] = useState(false);
+  const [stats, setStats] = useState(null);
   const citationText = "OpenKineticsPredictor: ....";
+
+  useEffect(() => {
+    let isMounted = true;
+
+    apiClient.get('/about-stats/')
+      .then((response) => {
+        if (!isMounted) return;
+        setStats(response.data || {});
+      })
+      .catch(() => {
+        if (!isMounted) return;
+        setStats({});
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const formatMetric = (value) => {
+    if (typeof value !== 'number' || Number.isNaN(value)) return '—';
+    return numberFormatter.format(value);
+  };
 
   const copyCitation = () => {
     navigator.clipboard.writeText(citationText)
@@ -66,6 +127,17 @@ const About = () => {
         <div className="about-header">
           <h2>About OpenKineticsPredictor</h2>
         </div>
+
+        <section className="about-metrics-section" aria-label="Platform usage metrics">
+          <div className="about-metrics-grid">
+            {METRIC_CARDS.map((metric) => (
+              <article key={metric.key} className="about-metric-card">
+                <div className="about-metric-value">{formatMetric(stats?.[metric.key])}</div>
+                <div className="about-metric-label">{metric.label}</div>
+              </article>
+            ))}
+          </div>
+        </section>
 
         <section style={{ marginBottom: '3rem' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '1rem' }}>

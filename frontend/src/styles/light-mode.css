@@ -1040,6 +1040,19 @@
   color: #1c1443;
 }
 
+[data-theme="light"] .about-metric-card {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(110, 90, 200, 0.14);
+}
+
+[data-theme="light"] .about-metric-value {
+  color: #24195a;
+}
+
+[data-theme="light"] .about-metric-label {
+  color: rgba(70, 56, 128, 0.82);
+}
+
 [data-theme="light"] .about-institution-card {
   background: rgba(255, 255, 255, 0.92);
   border-color: rgba(110, 90, 200, 0.14);

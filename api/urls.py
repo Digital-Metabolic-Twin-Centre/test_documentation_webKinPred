@@ -6,6 +6,7 @@ from .views import (
     health_views,
     progress_views,
     similarity_views,
+    stats_views,
     validation_views,
 )
 from .views.csrf_views import get_csrf
@@ -17,6 +18,7 @@ urlpatterns = [
     path("api-key/generate/", api_key_generate, name="api_key_generate"),
     path("api-key/revoke/", api_key_revoke, name="api_key_revoke"),
     path("health/", health_views.health_check, name="health_check"),
+    path("about-stats/", stats_views.about_stats, name="about_stats"),
     path("submit-job/", job_views.submit_job, name="submit_job"),
     path("job-status/<public_id>/", job_views.job_status, name="job_status"),
     path(
