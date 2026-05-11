@@ -388,11 +388,20 @@ def _kinetics_type_from_payload(payload: dict[str, Any]) -> str:
 # Input preparation for a single (smiles, sequence) pair
 # ============================================================================
 
+# Featurizers are stateless — instantiate once and reuse across all rows.
+_ATOM_FEATURIZER = CanonicalAtomFeaturizer()
+_BOND_FEATURIZER = CanonicalBondFeaturizer(self_loop=True)
+
+# Cache type: smiles -> (src_edges, dst_edges, node_h, edata, num_actual_nodes)
+_SmilesGraphCache = dict[str, tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict, int]]
+
+
 def prepare_inputs(
     smiles: str,
     protein_seq: str,
     embedder: Any | None,     # ESM_model instance, lazy on cache miss
     seq_id: str | None,       # shared cache key; None = skip caching
+    smiles_graph_cache: "_SmilesGraphCache | None" = None,
 ) -> tuple[Any, torch.Tensor, torch.Tensor, torch.Tensor] | None:
     """
     Build DGL molecular graph + ESM per-residue embedding for one sample.
@@ -405,23 +414,40 @@ def prepare_inputs(
     Returns (v_d, v_p, v_d_mask, v_p_mask) on success, None on failure.
     """
     try:
-        atom_featurizer = CanonicalAtomFeaturizer()
-        bond_featurizer = CanonicalBondFeaturizer(self_loop=True)
-        fc = partial(smiles_to_bigraph, add_self_loop=True)
+        if smiles_graph_cache is not None and smiles in smiles_graph_cache:
+            src, dst, cached_h, cached_edata, num_actual_nodes = smiles_graph_cache[smiles]
+            v_d = dgl.graph((src, dst))
+            v_d.ndata["h"] = cached_h.clone()
+            for k, t in cached_edata.items():
+                v_d.edata[k] = t.clone()
+            v_d = dgl.batch([v_d])
+            v_d_mask = torch.zeros(num_actual_nodes, dtype=torch.bool).unsqueeze(0)
+        else:
+            fc = partial(smiles_to_bigraph, add_self_loop=True)
+            v_d = fc(
+                smiles=smiles,
+                node_featurizer=_ATOM_FEATURIZER,
+                edge_featurizer=_BOND_FEATURIZER,
+            )
+            actual_node_feats = v_d.ndata.pop("h")
+            num_actual_nodes  = actual_node_feats.shape[0]
 
-        v_d = fc(
-            smiles=smiles,
-            node_featurizer=atom_featurizer,
-            edge_featurizer=bond_featurizer,
-        )
-        actual_node_feats = v_d.ndata.pop("h")
-        num_actual_nodes  = actual_node_feats.shape[0]
+            virtual_bit = torch.zeros([num_actual_nodes, 1])
+            v_d.ndata["h"] = torch.cat((actual_node_feats, virtual_bit), dim=1)
+            v_d = v_d.add_self_loop()
 
-        virtual_bit = torch.zeros([num_actual_nodes, 1])
-        v_d.ndata["h"] = torch.cat((actual_node_feats, virtual_bit), dim=1)
-        v_d = v_d.add_self_loop()
-        v_d = dgl.batch([v_d])
-        v_d_mask = torch.zeros(num_actual_nodes, dtype=torch.bool).unsqueeze(0)
+            if smiles_graph_cache is not None:
+                src, dst = v_d.edges()
+                smiles_graph_cache[smiles] = (
+                    src.clone(),
+                    dst.clone(),
+                    v_d.ndata["h"].clone(),
+                    {k: t.clone() for k, t in v_d.edata.items()},
+                    num_actual_nodes,
+                )
+
+            v_d = dgl.batch([v_d])
+            v_d_mask = torch.zeros(num_actual_nodes, dtype=torch.bool).unsqueeze(0)
 
         # ── Embedding: shared cache first, then on-the-fly ────────────────────
         v_p = _load_shared_embedding(seq_id)
@@ -549,6 +575,7 @@ def predict_kinetic_parameter_ensemble(
 
     # ── Row-outer, seed-inner inference ──────────────────────────────────────
     ensemble_predictions: list[float | None] = []
+    smiles_graph_cache: _SmilesGraphCache = {}
 
     rows_iter = tqdm(
         valid_df.iterrows(),
@@ -565,6 +592,7 @@ def predict_kinetic_parameter_ensemble(
                 row["sequence"],
                 esm_model,
                 row.get("seq_id"),
+                smiles_graph_cache,
             )
 
             if result is None:
