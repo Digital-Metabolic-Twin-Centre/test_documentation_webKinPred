@@ -36,6 +36,34 @@
   font-weight: 600;
 }
 
+.gpu-status-value--loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  opacity: 0.9;
+}
+
+.gpu-status-pulse {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 9999px;
+  background: currentColor;
+  opacity: 0.45;
+  animation: gpu-status-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes gpu-status-pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 0.85;
+    transform: scale(1);
+  }
+}
+
 .gpu-status-meta {
   display: flex;
   flex-wrap: wrap;

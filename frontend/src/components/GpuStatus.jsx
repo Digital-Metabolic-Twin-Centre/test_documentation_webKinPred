@@ -43,8 +43,11 @@ const BENCHMARK_DATA = [
   { method: 'KinForm-H', uncachedCpu: '56 min 10 s',  uncachedGpu: '3 min 42 s', cached: '36 s'       },
 ];
 
+const FALLBACK_STATUS = { configured: false, online: false, mode: 'cpu' };
+
 export default function GpuStatus({ layout = 'home' }) {
-  const [status, setStatus] = useState(null);
+  const [status, setStatus] = useState(FALLBACK_STATUS);
+  const [isCheckingStatus, setIsCheckingStatus] = useState(true);
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -52,9 +55,11 @@ export default function GpuStatus({ layout = 'home' }) {
     const fetchStatus = async () => {
       try {
         const { data } = await apiClient.get('/v1/gpu/status/');
-        if (!cancelled) setStatus(data || { configured: false, online: false, mode: 'cpu' });
+        if (!cancelled) setStatus(data || FALLBACK_STATUS);
       } catch (_) {
-        if (!cancelled) setStatus({ configured: false, online: false, mode: 'cpu' });
+        if (!cancelled) setStatus(FALLBACK_STATUS);
+      } finally {
+        if (!cancelled) setIsCheckingStatus(false);
       }
     };
     fetchStatus();
@@ -62,10 +67,7 @@ export default function GpuStatus({ layout = 'home' }) {
     return () => { cancelled = true; clearInterval(timer); };
   }, []);
 
-  if (!status) return null;
-
-  const isOnline = status.configured && status.online;
-  const schedule = 'Daily 5 PM – 8 AM GMT · 24h on weekends';
+  const isOnline = !isCheckingStatus && status.configured && status.online;
 
   let remaining = null;
   if (isOnline) {
@@ -91,8 +93,15 @@ export default function GpuStatus({ layout = 'home' }) {
               <div className="gpu-status-content">
                 <div className="gpu-status-line">
                   <strong className="gpu-status-title">{isOnline ? 'GPU Available' : 'CPU Mode'}</strong>
-                  <span className="gpu-status-value">
-                    {isOnline ? `${remaining} remaining` : 'GPU currently unavailable'}
+                  <span className={`gpu-status-value${isCheckingStatus ? ' gpu-status-value--loading' : ''}`}>
+                    {isCheckingStatus ? (
+                      <>
+                        <span className="gpu-status-pulse" aria-hidden="true" />
+                        Checking GPU availability...
+                      </>
+                    ) : (
+                      isOnline ? `${remaining} remaining` : 'GPU currently unavailable'
+                    )}
                   </span>
                 </div>
 
@@ -149,7 +158,7 @@ export default function GpuStatus({ layout = 'home' }) {
                         {BENCHMARK_DATA.map(({ method, uncachedGpu, uncachedCpu, cached, cachedTooltip, uncachedGpuTooltip }) => (
                           <tr key={method}>
                             <td className="benchmark-method">{method}</td>
-                            <td 
+                            <td
                               className={`benchmark-time ${uncachedGpu === 'N/A' ? 'benchmark-na' : uncachedGpu ? '' : 'benchmark-empty'}`}
                               title={uncachedGpuTooltip || undefined}
                             >
