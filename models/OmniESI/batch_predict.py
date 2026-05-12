@@ -392,16 +392,12 @@ def _kinetics_type_from_payload(payload: dict[str, Any]) -> str:
 _ATOM_FEATURIZER = CanonicalAtomFeaturizer()
 _BOND_FEATURIZER = CanonicalBondFeaturizer(self_loop=True)
 
-# Cache type: smiles -> (src_edges, dst_edges, node_h, edata, num_actual_nodes)
-_SmilesGraphCache = dict[str, tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict, int]]
-
-
 def prepare_inputs(
     smiles: str,
     protein_seq: str,
     embedder: Any | None,     # ESM_model instance, lazy on cache miss
     seq_id: str | None,       # shared cache key; None = skip caching
-    smiles_graph_cache: "_SmilesGraphCache | None" = None,
+    smiles_graph_cache: "dict | None" = None,
 ) -> tuple[Any, torch.Tensor, torch.Tensor, torch.Tensor] | None:
     """
     Build DGL molecular graph + ESM per-residue embedding for one sample.
@@ -575,7 +571,7 @@ def predict_kinetic_parameter_ensemble(
 
     # ── Row-outer, seed-inner inference ──────────────────────────────────────
     ensemble_predictions: list[float | None] = []
-    smiles_graph_cache: _SmilesGraphCache = {}
+    smiles_graph_cache: dict = {}
 
     rows_iter = tqdm(
         valid_df.iterrows(),
