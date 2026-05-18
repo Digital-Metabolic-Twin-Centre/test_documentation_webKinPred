@@ -16,6 +16,7 @@ from api.services.gpu_precompute_status_service import record_gpu_precompute_res
 
 
 _DEFAULT_HEALTH_TTL = 10
+_DEFAULT_JOB_TIMEOUT = 21600
 _DEFAULT_POLL_INTERVAL = 1.0
 _DEFAULT_POLL_LOG_INTERVAL = 120
 _DEFAULT_HTTP_TIMEOUT = 5.0
@@ -139,8 +140,10 @@ def _poll_job(
     method_key: str,
     target: str,
 ) -> dict:
+    timeout_secs = _env_int("GPU_EMBED_JOB_TIMEOUT_SECONDS", _DEFAULT_JOB_TIMEOUT)
     log_interval = _env_int("GPU_EMBED_POLL_LOG_INTERVAL_SECONDS", _DEFAULT_POLL_LOG_INTERVAL)
     started_at = time.monotonic()
+    deadline = started_at + float(timeout_secs)
     next_log_at = started_at + float(log_interval)
     last_state: str | None = None
 
@@ -164,6 +167,20 @@ def _poll_job(
             return {"status": "failed", "detail": status}
 
         now = time.monotonic()
+        if now >= deadline:
+            elapsed = int(now - started_at)
+            _log.warning(
+                "GPU precompute timed out for job %s (%s/%s): gpu_job_id=%s state=%s elapsed=%ss timeout=%ss",
+                job_public_id,
+                method_key,
+                target,
+                gpu_job_id,
+                state or "unknown",
+                elapsed,
+                timeout_secs,
+            )
+            return {"status": "timeout", "detail": status}
+
         if now >= next_log_at:
             elapsed = int(now - started_at)
             _log.info(

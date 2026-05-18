@@ -130,6 +130,17 @@ def run_generic_subprocess_prediction(
                 "GPU precompute incomplete for %s job %s: %s (used_gpu=%s, failed=%s)",
                 desc.key, public_id, _gpu.reason, _gpu.used_gpu, _gpu.failed,
             )
+        if _gpu.failed and cfg.fail_on_gpu_precompute_failure:
+            reason = str(_gpu.reason or "").strip().lower()
+            if "timeout" in reason or "timed out" in reason:
+                raise PredictionError(
+                    f"{desc.display_name} could not complete because GPU precompute timed out. "
+                    "Please try again later."
+                )
+            raise PredictionError(
+                f"{desc.display_name} could not complete because GPU precompute failed. "
+                "Please try again later."
+            )
 
     job_dir = os.path.join(MEDIA_ROOT, "jobs", str(public_id))
     safe_method = re.sub(r"[^A-Za-z0-9_-]+", "_", desc.key)
