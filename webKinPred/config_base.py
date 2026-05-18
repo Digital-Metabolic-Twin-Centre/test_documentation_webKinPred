@@ -25,6 +25,8 @@ _DATA_PATH_REL = {
     "OmniESI-additional": "models/OmniESI/code/OmniESI_additional_data/additional_data",
     "OmniESI-embed": "media/sequence_info/omniesi_esm2",
     "OmniESI-weights": "cache/omniesi",
+    "IECata": "models/IECata",
+    "iecata_prot_t5_residues": "media/sequence_info/iecata_prot_t5_residues",
     "media": "media",
     "tools": "tools",
 }
@@ -40,6 +42,8 @@ _PREDICTION_SCRIPT_REL = {
     "KinForm": "models/KinForm/code/main.py",
     "MMISA-KM": "models/MMISA-KM/upstream/script/prediction_script.py",
     "OmniESI": "models/OmniESI/batch_predict.py",
+    "IECata": "models/IECata/prediction_script.py",
+     
 }
 
 
