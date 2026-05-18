@@ -7,6 +7,8 @@ Usage:
 Environment variables injected by SubprocessEngineConfig:
     IECATA_DATA      — path to models/IECata (model weights + configs)
     IECATA_EMBED_DIR — path to media/sequence_info/iecata_prot_t5_residues/
+    IECATA_PROTT5_NAME - Hugging Face model name for ProtT5 (optional)
+    IECATA_PROTT5_LOCAL_PATH - local ProtT5 tokenizer/model path (optional)
 
 Input JSON (webKinPred contract):
     {
@@ -32,15 +34,19 @@ Output JSON:
 Predictions are in native units (kcat/KM s^-1 M^-1), NOT log10.
 """
 
+from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import warnings
+from typing import Optional
 import numpy as np
 import pandas as pd
 import torch
 from functools import partial
+
 
 warnings.filterwarnings("ignore")
 
@@ -62,6 +68,72 @@ MODEL_PATH  = os.path.join(
 MAX_PROT_LEN = 1200   # IECata pads protein dim to this in the dataloader
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def load_prott5():
+    from transformers import T5EncoderModel, T5Tokenizer
+
+    local_path = os.environ.get("IECATA_PROTT5_LOCAL_PATH")
+    model_name = os.environ.get("IECATA_PROTT5_NAME", "Rostlab/prot_t5_xl_uniref50")
+
+    source = local_path or model_name
+    tokenizer = T5Tokenizer.from_pretrained(source, do_lower_case=False)
+    model = T5EncoderModel.from_pretrained(source)
+    model = model.to(DEVICE).eval()
+    if torch.cuda.is_available():
+        model = model.half()
+    return tokenizer, model
+
+
+def encode_protein_sequence(sequence: str, tokenizer, model) -> np.ndarray:
+    cleaned = re.sub(r"[UZOB]", "X", "".join(str(sequence).split()))
+    tokens = list(cleaned)
+    with torch.no_grad():
+        encoded = tokenizer.batch_encode_plus(
+            [tokens],
+            add_special_tokens=True,
+            padding=True,
+            is_split_into_words=True,
+            return_tensors="pt",
+        )
+        encoded = {key: value.to(DEVICE) for key, value in encoded.items()}
+        embedding = model(input_ids=encoded["input_ids"])[0]
+
+    if embedding.shape[1] <= 1:
+        raise RuntimeError("ProtT5 returned an empty embedding")
+
+    return embedding[0].detach().float().cpu().numpy()[:-1]
+
+
+def _cache_key_for_sequence(sequence: str, seq_id: str | None = None) -> str:
+    seq_id = str(seq_id or "").strip()
+    if seq_id:
+        return seq_id
+
+    import hashlib
+
+    digest = hashlib.sha1(str(sequence).strip().encode("utf-8")).hexdigest()
+    return f"seq_{digest[:16]}"
+
+
+def ensure_cached_embedding(
+    sequence: str,
+    seq_id: str,
+    embed_dir: str,
+    tokenizer,
+    model,
+) -> Optional[str]:
+    if not seq_id or not sequence:
+        return None
+
+    os.makedirs(embed_dir, exist_ok=True)
+    npy_path = os.path.join(embed_dir, f"{seq_id}.npy")
+    if os.path.exists(npy_path):
+        return npy_path
+
+    embedding = encode_protein_sequence(sequence, tokenizer, model)
+    np.save(npy_path, embedding)
+    return npy_path
 # ---------------------------------------------------------------------------
 # Dataset — bypasses Prot_fasta_Feature_Extraction; loads cached .npy instead
 # ---------------------------------------------------------------------------
@@ -186,21 +258,42 @@ def main():
     cfg.freeze()
     set_seed(cfg.SOLVER.SEED)
 
+    if not EMBED_DIR:
+        raise RuntimeError("IECATA_EMBED_DIR is not set")
+
+    tokenizer = None
+    prott5_model = None
+
     # ── Separate valid rows from structurally invalid ones ───────────────────
     valid_rows      = []
     invalid_indices = []
     index_map       = []   # valid_rows[i] came from rows[index_map[i]]
 
     for idx, row in enumerate(rows):
-        seq_id = row.get("seq_id", "")
-        smiles = row.get("substrates", "")
+        sequence = str(row.get("sequence", "")).strip()
+        seq_id = _cache_key_for_sequence(sequence, row.get("seq_id", ""))
+        smiles = str(row.get("substrates", "")).strip()
         npy    = os.path.join(EMBED_DIR, f"{seq_id}.npy") if seq_id else ""
 
-        if not seq_id or not smiles or not os.path.exists(npy):
+        if not seq_id or not smiles or not sequence:
             invalid_indices.append(idx)
-        else:
-            valid_rows.append(row)
-            index_map.append(idx)
+            continue
+
+        if not os.path.exists(npy):
+            try:
+                if tokenizer is None or prott5_model is None:
+                    tokenizer, prott5_model = load_prott5()
+                npy = ensure_cached_embedding(sequence, seq_id, EMBED_DIR, tokenizer, prott5_model)
+            except Exception:
+                invalid_indices.append(idx)
+                continue
+
+        if not npy or not os.path.exists(npy):
+            invalid_indices.append(idx)
+            continue
+
+        valid_rows.append({"seq_id": seq_id, "substrates": smiles})
+        index_map.append(idx)
 
     # ── Load model and run inference ─────────────────────────────────────────
     predictions = [None] * n
@@ -210,20 +303,17 @@ def main():
         dataset = CachedDTIDataset(valid_rows, embed_dir=EMBED_DIR)
         log10_preds = run_inference(model, dataset, batch_size=cfg.SOLVER.BATCH_SIZE)
 
-        touched_npy = set()
         for i, log_val in enumerate(log10_preds):
             orig_idx = index_map[i]
             try:
-                predictions[orig_idx] = float(10 ** log_val)
-                touched_npy.add(
-                    os.path.join(EMBED_DIR, f"{valid_rows[i]['seq_id']}.npy")
-                )
+                # Keep the model output in log10 space (no conversion)
+                predictions[orig_idx] = float(log_val)
             except Exception:
                 predictions[orig_idx] = None
                 if orig_idx not in invalid_indices:
                     invalid_indices.append(orig_idx)
 
-        # ── Ephemeral cleanup (EITLEM pattern) ───────────────────────────────
+        # ── Cleanup (EITLEM pattern) ───────────────────────────────
         for path in touched_npy:
             try:
                 os.remove(path)
