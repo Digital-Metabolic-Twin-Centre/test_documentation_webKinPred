@@ -251,9 +251,45 @@ class GpuEmbedServiceTests(unittest.TestCase):
                                                 job_public_id="job_fc",
                                                 method_key="UniKP",
                                                 target="kcat",
-                                                valid_sequences=["AAAA"],
-                                                env={},
-                                            )
+                                            valid_sequences=["AAAA"],
+                                            env={},
+                                        )
+
+    def test_poll_timeout_still_succeeds_when_postcheck_is_complete(self):
+        initial_plan = SimpleNamespace(
+            need_computation=1,
+            gpu_supported=True,
+            gpu_reason=None,
+            profile="catpred_embed",
+            seq_id_to_seq={"sid_1": "AAAA"},
+        )
+        post_plan = SimpleNamespace(
+            need_computation=0,
+            gpu_supported=True,
+            gpu_reason=None,
+            profile="catpred_embed",
+            seq_id_to_seq={"sid_1": "AAAA"},
+        )
+
+        with patch.object(ges, "build_embedding_plan", side_effect=[initial_plan, post_plan]):
+            with patch.object(ges, "gpu_step_work", return_value={"catpred_embed_kcat": ["sid_1"]}):
+                with patch.object(ges, "_base_url", return_value="http://gpu"):
+                    with patch.object(ges, "get_gpu_status", return_value={"online": True}):
+                        with patch.object(ges, "start_embedding_tracking", return_value=True):
+                            with patch.object(ges, "_http_json", return_value={"job_id": "job_1"}):
+                                with patch.object(ges, "_poll_job", return_value={"status": "timeout"}):
+                                    result = ges.run_gpu_precompute_if_available(
+                                        job_public_id="job_timeout_complete",
+                                        method_key="CatPred",
+                                        target="kcat",
+                                        valid_sequences=["AAAA"],
+                                        env={},
+                                    )
+
+        self.assertTrue(result.used_gpu)
+        self.assertTrue(result.completed)
+        self.assertFalse(result.failed)
+        self.assertEqual(result.reason, "done_after_poll_timeout")
 
 
 if __name__ == "__main__":

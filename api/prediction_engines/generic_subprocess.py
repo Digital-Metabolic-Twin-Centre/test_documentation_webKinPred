@@ -34,10 +34,10 @@ from api.services.job_progress_service import (
     set_stage_prediction_total,
 )
 
-_log = logging.getLogger(__name__)
 from api.prediction_engines.subprocess_runner import run_prediction_subprocess
 from api.utils.convert_to_mol import convert_to_mol
 from webKinPred.settings import MEDIA_ROOT
+_log = logging.getLogger(__name__)
 
 
 def run_generic_subprocess_prediction(
