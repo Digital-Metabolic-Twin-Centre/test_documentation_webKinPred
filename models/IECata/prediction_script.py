@@ -31,7 +31,7 @@ Output JSON:
       "invalid_indices": [2, 5]
     }
 
-Predictions are in native units (kcat/KM s^-1 M^-1), NOT log10.
+Predictions are in log10 scale. 
 """
 
 from __future__ import annotations
@@ -306,19 +306,14 @@ def main():
         for i, log_val in enumerate(log10_preds):
             orig_idx = index_map[i]
             try:
-                # Keep the model output in log10 space (no conversion)
+                
                 predictions[orig_idx] = float(log_val)
             except Exception:
                 predictions[orig_idx] = None
                 if orig_idx not in invalid_indices:
                     invalid_indices.append(orig_idx)
 
-        # ── Cleanup (EITLEM pattern) ───────────────────────────────
-        for path in touched_npy:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+        
 
     with open(args.output, "w") as f:
         json.dump(
