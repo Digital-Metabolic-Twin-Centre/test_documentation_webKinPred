@@ -16,6 +16,7 @@ from api.services.gpu_precompute_status_service import record_gpu_precompute_res
 
 
 _DEFAULT_HEALTH_TTL = 10
+_DEFAULT_JOB_TIMEOUT = 21600
 _DEFAULT_POLL_INTERVAL = 1.0
 _DEFAULT_POLL_LOG_INTERVAL = 120
 _DEFAULT_HTTP_TIMEOUT = 5.0
@@ -139,13 +140,53 @@ def _poll_job(
     method_key: str,
     target: str,
 ) -> dict:
+    timeout_secs = _env_int("GPU_EMBED_JOB_TIMEOUT_SECONDS", _DEFAULT_JOB_TIMEOUT)
     log_interval = _env_int("GPU_EMBED_POLL_LOG_INTERVAL_SECONDS", _DEFAULT_POLL_LOG_INTERVAL)
     started_at = time.monotonic()
+    deadline = started_at + float(timeout_secs)
     next_log_at = started_at + float(log_interval)
     last_state: str | None = None
+    poll_error_count = 0
+    last_poll_error: str | None = None
 
     while True:
-        status = _http_json("GET", f"{base}/embed/jobs/{urllib.parse.quote(gpu_job_id)}")
+        try:
+            status = _http_json("GET", f"{base}/embed/jobs/{urllib.parse.quote(gpu_job_id)}")
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as exc:
+            poll_error_count += 1
+            last_poll_error = str(exc)
+            now = time.monotonic()
+            if now >= deadline:
+                elapsed = int(now - started_at)
+                _log.warning(
+                    "GPU precompute polling timed out after repeated poll errors for job %s (%s/%s): gpu_job_id=%s elapsed=%ss timeout=%ss errors=%s last_error=%s",
+                    job_public_id,
+                    method_key,
+                    target,
+                    gpu_job_id,
+                    elapsed,
+                    timeout_secs,
+                    poll_error_count,
+                    last_poll_error,
+                )
+                return {"status": "timeout", "detail": {"last_error": last_poll_error}}
+
+            if now >= next_log_at:
+                elapsed = int(now - started_at)
+                _log.warning(
+                    "Transient GPU poll error for job %s (%s/%s): gpu_job_id=%s elapsed=%ss errors=%s last_error=%s",
+                    job_public_id,
+                    method_key,
+                    target,
+                    gpu_job_id,
+                    elapsed,
+                    poll_error_count,
+                    last_poll_error,
+                )
+                next_log_at = now + float(log_interval)
+            time.sleep(_DEFAULT_POLL_INTERVAL)
+            continue
+
         state = str(status.get("status", "")).strip().lower()
         if state != last_state:
             last_state = state
@@ -164,6 +205,21 @@ def _poll_job(
             return {"status": "failed", "detail": status}
 
         now = time.monotonic()
+        if now >= deadline:
+            elapsed = int(now - started_at)
+            _log.warning(
+                "GPU precompute timed out for job %s (%s/%s): gpu_job_id=%s state=%s elapsed=%ss timeout=%ss errors=%s",
+                job_public_id,
+                method_key,
+                target,
+                gpu_job_id,
+                state or "unknown",
+                elapsed,
+                timeout_secs,
+                poll_error_count,
+            )
+            return {"status": "timeout", "detail": status}
+
         if now >= next_log_at:
             elapsed = int(now - started_at)
             _log.info(
@@ -347,10 +403,12 @@ def run_gpu_precompute_if_available(
             method_key=method_key,
             target=target,
         )
-        if polled["status"] == "done":
+        if polled["status"] in {"done", "timeout"}:
             # Remote service may report "done" while writing no cache files
             # (for example during smoke/no-op command wiring). Re-check local
             # cache state before treating GPU precompute as completed.
+            # We also run this check on timeout to avoid false failures caused
+            # by transient polling/network errors after remote completion.
             try:
                 post_plan = build_embedding_plan(
                     method_key=method_key,
@@ -368,9 +426,18 @@ def run_gpu_precompute_if_available(
                 )
 
             if post_plan.need_computation > 0:
+                timeout_suffix = (
+                    " after poll timeout"
+                    if polled["status"] == "timeout"
+                    else ""
+                )
                 _log.warning(
-                    "GPU job finished but outputs are incomplete for job %s (%s/%s): still missing %d file(s). Falling back to local compute.",
-                    job_public_id, method_key, target, post_plan.need_computation,
+                    "GPU job%s but outputs are incomplete for job %s (%s/%s): still missing %d file(s). Falling back to local compute.",
+                    timeout_suffix,
+                    job_public_id,
+                    method_key,
+                    target,
+                    post_plan.need_computation,
                 )
                 return _finish(
                     GpuPrecomputeResult(
@@ -378,8 +445,23 @@ def run_gpu_precompute_if_available(
                         True,
                         False,
                         True,
-                        f"incomplete_remote_outputs:{post_plan.need_computation}",
+                        (
+                            f"timeout_incomplete_remote_outputs:{post_plan.need_computation}"
+                            if polled["status"] == "timeout"
+                            else f"incomplete_remote_outputs:{post_plan.need_computation}"
+                        ),
                     )
+                )
+
+            if polled["status"] == "timeout":
+                _log.info(
+                    "GPU outputs complete for job %s (%s/%s) despite poll timeout; proceeding with prediction.",
+                    job_public_id,
+                    method_key,
+                    target,
+                )
+                return _finish(
+                    GpuPrecomputeResult(True, True, True, False, "done_after_poll_timeout")
                 )
 
             _log.info(

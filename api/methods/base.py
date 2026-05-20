@@ -120,6 +120,11 @@ class SubprocessEngineConfig:
     validate_chemistry: bool = True
     allowed_amino_acids: str = "ACDEFGHIKLMNPQRSTVWY"
 
+    # When True, any incomplete GPU precompute result (offline, timeout,
+    # request failure, incomplete remote outputs) is treated as a hard failure
+    # for this method stage instead of falling back to local CPU execution.
+    fail_on_gpu_precompute_failure: bool = False
+
 
 # ---------------------------------------------------------------------------
 # MethodDescriptor — full specification of one prediction method
