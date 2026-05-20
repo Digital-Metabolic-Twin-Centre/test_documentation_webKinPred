@@ -160,6 +160,7 @@ COPY --from=env-catpred    /opt/conda/envs/catpred_env   /opt/conda/envs/catpred
 COPY --from=env-mmisakm   /opt/conda/envs/mmisakm_env  /opt/conda/envs/mmisakm_env
 COPY --from=env-omniesi   /opt/conda/envs/omniesi_env  /opt/conda/envs/omniesi_env
 COPY --from=env-iecata    /opt/conda/envs/iecata_env   /opt/conda/envs/iecata_env
+COPY --from=env-realkcat   /opt/conda/envs/realkcat_env  /opt/conda/envs/realkcat_env
 COPY --from=env-pseq2sites /opt/conda/envs/pseq2sites    /opt/conda/envs/pseq2sites
 COPY --from=env-esm        /opt/conda/envs/esm           /opt/conda/envs/esm
 COPY --from=env-esmc       /opt/conda/envs/esmc          /opt/conda/envs/esmc
