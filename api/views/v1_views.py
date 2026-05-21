@@ -15,9 +15,11 @@ needing credentials.
 
 Quota
 -----
-Quota accounting uses the IP address stored on the ApiUser record associated
-with the API key (not the request's source IP).  This keeps quota consistent
-regardless of where the script is run.
+Quota accounting is keyed by API key identity (not source IP), so requests
+from different hosts still share one quota bucket per key. The effective
+daily limit for authenticated requests is the higher of:
+  - the owning user's IP-level limit, and
+  - the API key's optional custom limit.
 """
 
 import io
@@ -55,9 +57,9 @@ def _json_error(message: str, status: int = 400) -> JsonResponse:
     return JsonResponse({"error": message}, status=status)
 
 
-def _quota_dict(ip_address: str) -> dict:
+def _quota_dict(quota_subject: str, daily_limit: int | None = None) -> dict:
     """Return quota data in the camelCase shape expected by API clients."""
-    usage = get_quota_usage(ip_address)
+    usage = get_quota_usage(quota_subject, daily_limit=daily_limit)
     return {
         "limit": usage["limit"],
         "used": usage["used"],
@@ -222,10 +224,15 @@ def api_quota(request):
     """
     Return the current quota status for the authenticated key owner.
 
-    Quota is tracked per-day (resetting at midnight UTC) and per-user
-    (keyed by the IP address stored on the ApiUser record).
+    Quota is tracked per-day (resetting at midnight UTC) and keyed by
+    authenticated API key.
     """
-    return JsonResponse(_quota_dict(request.api_ip))
+    return JsonResponse(
+        _quota_dict(
+            request.api_quota_subject,
+            daily_limit=request.api_daily_limit,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +298,12 @@ def api_submit_job(request):
         return error
 
     error_response, success_data = process_job_submission_from_params(
-        params, csv_file, request.api_ip
+        params,
+        csv_file,
+        request.api_request_ip,
+        quota_subject=request.api_quota_subject,
+        daily_limit=request.api_daily_limit,
+        user=request.api_user,
     )
 
     if error_response:
@@ -308,7 +320,10 @@ def api_submit_job(request):
             "status": "Pending",
             "statusUrl": f"/api/v1/status/{public_id}/",
             "resultUrl": f"/api/v1/result/{public_id}/",
-            "quota": _quota_dict(request.api_ip),
+            "quota": _quota_dict(
+                request.api_quota_subject,
+                daily_limit=request.api_daily_limit,
+            ),
         },
         status=201,
     )

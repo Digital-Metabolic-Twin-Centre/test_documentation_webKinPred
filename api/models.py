@@ -52,6 +52,12 @@ class Job(models.Model):
     public_id = models.CharField(max_length=10, unique=True)
     prediction_type = models.CharField(max_length=32)
     ip_address = models.CharField(max_length=45, blank=True, default="")  # IPv4/IPv6
+    quota_subject = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+        help_text="Identifier used for quota accounting (IP or API-key subject).",
+    )
     requested_rows = models.PositiveIntegerField(default=0)
     kcat_method = models.CharField(max_length=50, null=True, blank=True)
     km_method = models.CharField(max_length=50, null=True, blank=True)
@@ -166,9 +172,9 @@ class ApiKey(models.Model):
     """
     A long-lived API key that grants programmatic access to the prediction API.
 
-    Keys are tied to an ApiUser (identified by IP address) so that the existing
-    IP-based quota and blocking system applies automatically. A single user can
-    hold multiple keys — one per project or script, for example.
+    Keys are tied to an ApiUser (identified by IP address). Quota/blocking
+    policy is inherited from the owning ApiUser, while usage counters are
+    tracked by API key subject.
 
     The full key is only returned once at creation time (via the management
     command). Afterwards, only the first 10 characters are surfaced in the admin
@@ -192,6 +198,14 @@ class ApiKey(models.Model):
         max_length=100,
         blank=True,
         help_text="A human-readable name for this key, e.g. 'Lab Python Script'.",
+    )
+    custom_daily_limit = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text=(
+            "Optional per-key daily limit override. "
+            "Effective limit is max(user limit, key limit)."
+        ),
     )
     is_active = models.BooleanField(
         default=True,
@@ -218,6 +232,18 @@ class ApiKey(models.Model):
     def key_prefix(self):
         """Returns only the first 10 characters for safe display in the admin."""
         return self.key[:10] + "…"
+
+    @property
+    def effective_daily_limit(self):
+        """
+        Effective daily limit for authenticated requests using this key.
+
+        If the owning user is blocked, effective limit is 0 regardless of key.
+        Otherwise use the higher of the user's IP limit and this key's limit.
+        """
+        if self.user.is_blocked:
+            return 0
+        return max(self.user.effective_daily_limit, self.custom_daily_limit or 0)
 
 
 class AboutStatsCache(models.Model):

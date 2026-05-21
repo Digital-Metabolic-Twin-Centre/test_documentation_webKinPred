@@ -432,7 +432,7 @@ def _execute_prediction(
 
     # ── 7. Credit back empty rows and update job ──────────────────────────────
     empty = int((df[output_col] == "").sum()) + int(df[output_col].isna().sum())
-    credit_back(job.ip_address, min(max(0, empty), int(job.requested_rows)))
+    credit_back(_job_quota_subject(job), min(max(0, empty), int(job.requested_rows)))
 
     job.output_file.name = os.path.relpath(out_path, settings.MEDIA_ROOT)
     job.error_message = _build_skipped_message(skipped_reasons)
@@ -599,7 +599,7 @@ def _execute_both_prediction(
     processed = int(fully_predicted.sum())
     to_refund = max(0, int(job.requested_rows) - processed)
     if to_refund > 0:
-        credit_back(job.ip_address, to_refund)
+        credit_back(_job_quota_subject(job), to_refund)
 
     Job.objects.filter(pk=job.pk).update(
         output_file=os.path.relpath(out_path, settings.MEDIA_ROOT),
@@ -779,7 +779,7 @@ def _execute_multi_prediction(
     processed = int(fully_predicted.sum())
     to_refund = max(0, int(job.requested_rows) - processed)
     if to_refund > 0:
-        credit_back(job.ip_address, to_refund)
+        credit_back(_job_quota_subject(job), to_refund)
 
     Job.objects.filter(pk=job.pk).update(
         output_file=os.path.relpath(out_path, settings.MEDIA_ROOT),
@@ -866,7 +866,7 @@ def _build_skipped_message(skipped_reasons: dict[int, str]) -> str:
 def _load_input(job: Job) -> pd.DataFrame:
     """Read the job's input CSV, crediting back quota on failure."""
     path = os.path.join(settings.MEDIA_ROOT, "jobs", str(job.public_id), "input.csv")
-    df = safe_read_csv(path, job.ip_address, job.requested_rows)
+    df = safe_read_csv(path, _job_quota_subject(job), job.requested_rows)
     if df is None:
         raise PredictionError(
             "The uploaded CSV file could not be read. "
@@ -890,7 +890,17 @@ def _handle_oom(job: Job, label: str) -> None:
         error_message=msg,
         completion_time=timezone.now(),
     )
-    credit_back(job.ip_address, job.requested_rows)
+    credit_back(_job_quota_subject(job), job.requested_rows)
+
+
+def _job_quota_subject(job: Job) -> str:
+    """
+    Resolve the quota subject used for this job.
+
+    Older rows may not have ``quota_subject`` populated; fallback to the legacy
+    IP-based key in that case.
+    """
+    return job.quota_subject or job.ip_address
 
 
 def _sanitise_unexpected(exc: Exception, label: str) -> str:

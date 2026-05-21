@@ -22,9 +22,9 @@ from api.utils.job_utils import (
     validate_sequence_handling_option,
 )
 from api.utils.quotas import (
-    DAILY_LIMIT,
     get_client_ip,
     get_or_create_user,
+    get_user_daily_limit,
     reserve_or_reject,
 )
 from api.utils.validation_utils import (
@@ -64,14 +64,20 @@ def process_job_submission(
 
 
 def process_job_submission_from_params(
-    params: Dict[str, Any], file, ip_address: str
+    params: Dict[str, Any],
+    file,
+    ip_address: str,
+    *,
+    quota_subject: str | None = None,
+    daily_limit: int | None = None,
+    user=None,
 ) -> Tuple[Optional[JsonResponse], Optional[Dict[str, Any]]]:
     """
     Core job-submission logic, decoupled from the HTTP request object.
 
     This function is called by both the web-UI view (via
     ``process_job_submission``) and the public API v1 submit endpoint.  It
-    accepts an explicit params dict and IP address so it can be used
+    accepts an explicit params dict and request IP so it can be used
     regardless of how the caller obtained those values.
 
     Args:
@@ -85,7 +91,11 @@ def process_job_submission_from_params(
                       disable_gpu_precompute – bool, internal benchmark toggle
         file:       A file-like object (Django InMemoryUploadedFile or
                     io.BytesIO) containing the CSV data.
-        ip_address: The IP address to charge quota against.
+        ip_address: Request source IP to store on the Job record.
+        quota_subject: Identifier used for rate-limit accounting (defaults
+                       to ``ip_address`` when omitted).
+        daily_limit: Optional explicit daily limit for ``quota_subject``.
+        user: Optional ApiUser instance to attach to the created Job.
 
     Returns:
         Tuple of (error_response, success_data).
@@ -132,14 +142,20 @@ def process_job_submission_from_params(
 
     # --- Quota -----------------------------------------------------------------
 
-    quota_response = handle_quota_validation(ip_address, len(dataframe))
+    quota_subject = quota_subject or ip_address
+    quota_response = handle_quota_validation(
+        quota_subject,
+        len(dataframe),
+        daily_limit=daily_limit,
+    )
     if quota_response:
         return quota_response, None
 
     # --- Create job record and dispatch task -----------------------------------
 
     try:
-        user = get_or_create_user(ip_address)
+        if user is None:
+            user = get_or_create_user(ip_address)
     except Exception as e:
         _log.warning(
             "Could not create or update ApiUser",
@@ -159,7 +175,13 @@ def process_job_submission_from_params(
         dataframe,
     )
 
-    job = create_job_record(params, ip_address, len(dataframe), user)
+    job = create_job_record(
+        params,
+        ip_address,
+        len(dataframe),
+        user,
+        quota_subject=quota_subject,
+    )
     # New jobs can affect About-page totals once processed; mark cache stale.
     mark_about_stats_cache_stale()
 
@@ -174,20 +196,31 @@ def process_job_submission_from_params(
     }
 
 
-def handle_quota_validation(ip_address: str, requested_rows: int) -> Optional[JsonResponse]:
+def handle_quota_validation(
+    quota_subject: str,
+    requested_rows: int,
+    *,
+    daily_limit: int | None = None,
+) -> Optional[JsonResponse]:
     """
     Handle quota validation and return error response if quota exceeded.
 
     Args:
-        ip_address: Client IP address
+        quota_subject: Quota subject identifier (IP or API-key subject).
         requested_rows: Number of rows being requested
+        daily_limit: Optional explicit limit for this subject.
 
     Returns:
         JsonResponse with error if quota exceeded, None if allowed
     """
-    allowed, remaining, ttl = reserve_or_reject(ip_address, requested_rows)
+    allowed, remaining, ttl = reserve_or_reject(
+        quota_subject,
+        requested_rows,
+        daily_limit=daily_limit,
+    )
 
-    rate_headers = create_rate_limit_headers(DAILY_LIMIT, remaining, ttl)
+    header_limit = daily_limit if daily_limit is not None else get_user_daily_limit(quota_subject)
+    rate_headers = create_rate_limit_headers(header_limit, remaining, ttl)
 
     if not allowed:
         error_response = JsonResponse(
@@ -208,15 +241,23 @@ def handle_quota_validation(ip_address: str, requested_rows: int) -> Optional[Js
     return None
 
 
-def create_job_record(params: Dict[str, Any], ip_address: str, requested_rows: int, user) -> Job:
+def create_job_record(
+    params: Dict[str, Any],
+    ip_address: str,
+    requested_rows: int,
+    user,
+    *,
+    quota_subject: str | None = None,
+) -> Job:
     """
     Create and save a new job record.
 
     Args:
         params: Job parameters dictionary
-        ip_address: Client IP address
+        ip_address: Request source IP
         requested_rows: Number of rows in the request
         user: User model instance
+        quota_subject: Identifier used for quota accounting.
 
     Returns:
         Created Job instance
@@ -230,6 +271,7 @@ def create_job_record(params: Dict[str, Any], ip_address: str, requested_rows: i
         status="Pending",
         handle_long_sequences=params["handle_long_sequences"],
         ip_address=ip_address,
+        quota_subject=quota_subject or ip_address,
         requested_rows=requested_rows,
         user=user,
     )

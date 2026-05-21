@@ -8,7 +8,7 @@ All v1 endpoints that require authentication should be decorated with
   2. Looks up the key in the database.
   3. Checks that the key is active and that the owner is not blocked.
   4. Stamps the key's last_used timestamp.
-  5. Attaches request.api_user and request.api_ip for use in the view.
+  5. Attaches request.api_user/request.api_key plus quota context fields.
 
 The decorator also applies @csrf_exempt so that programmatic clients do not
 need to obtain a CSRF cookie.
@@ -29,18 +29,18 @@ def require_api_key(view_func):
 
         @require_api_key
         def my_view(request):
-            ip = request.api_ip     # registered IP of the key owner
-            user = request.api_user  # ApiUser instance
+            user = request.api_user
+            key = request.api_key
+            quota_subject = request.api_quota_subject
             ...
 
-    On success, two attributes are attached to the request object:
-      - request.api_user  — the ApiUser record tied to this key
-      - request.api_ip    — the IP address stored on that ApiUser record
-                            (used for quota accounting)
-
-    The quota system is keyed by IP address, so using the registered IP (rather
-    than the actual request IP) ensures quota is always charged to the correct
-    account regardless of where the request originates.
+    On success, the following attributes are attached:
+      - request.api_user          — the ApiUser record tied to this key
+      - request.api_key           — the ApiKey instance used for auth
+      - request.api_quota_subject — Redis quota subject tied to this API key
+      - request.api_daily_limit   — effective daily limit for this key
+      - request.api_request_ip    — source IP of the current request
+      - request.api_ip            — legacy alias for the owner's registered IP
     """
 
     @csrf_exempt
@@ -81,12 +81,19 @@ def require_api_key(view_func):
         api_key.last_used = timezone.now()
         api_key.save(update_fields=["last_used"])
 
-        # Attach user context to the request for downstream use.
-        # Quota is enforced per *request* IP, not per key owner IP.
-        from api.utils.quotas import get_client_ip
+        # Attach authenticated context for downstream handlers.
+        from api.utils.quotas import (
+            api_key_quota_subject,
+            get_api_key_daily_limit,
+            get_client_ip,
+        )
 
+        request.api_key = api_key
         request.api_user = api_key.user
-        request.api_ip = get_client_ip(request)
+        request.api_quota_subject = api_key_quota_subject(api_key.pk)
+        request.api_daily_limit = get_api_key_daily_limit(api_key)
+        request.api_request_ip = get_client_ip(request)
+        request.api_ip = api_key.user.ip_address  # legacy compatibility
 
         return view_func(request, *args, **kwargs)
 

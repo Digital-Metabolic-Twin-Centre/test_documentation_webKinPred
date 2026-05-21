@@ -3,7 +3,13 @@ from django.contrib import admin
 from django.utils.html import format_html
 from django.urls import reverse
 from .models import ApiKey, ApiUser, Job, JobProgressStage
-from api.utils.quotas import get_quota_usage
+from api.utils.quotas import (
+    _key,
+    get_all_user_quota_subjects,
+    get_quota_usage,
+    get_user_quota_daily_limit,
+    get_user_quota_subject,
+)
 from db_models.seqmap_models import Sequence
 
 
@@ -33,7 +39,10 @@ class ApiUserAdmin(admin.ModelAdmin):
 
     @admin.display(description="Today's Usage")
     def quota_status(self, obj):
-        usage = get_quota_usage(obj.ip_address)
+        usage = get_quota_usage(
+            get_user_quota_subject(obj),
+            daily_limit=get_user_quota_daily_limit(obj),
+        )
         used = usage["used"]
         limit = usage["limit"]
         remaining = usage["remaining"]
@@ -56,7 +65,10 @@ class ApiUserAdmin(admin.ModelAdmin):
     @admin.display(description="Live Quota Status")
     def quota_info(self, obj):
         if obj.pk:
-            usage = get_quota_usage(obj.ip_address)
+            usage = get_quota_usage(
+                get_user_quota_subject(obj),
+                daily_limit=get_user_quota_daily_limit(obj),
+            )
             reset_hours = usage["reset_in_seconds"] // 3600
             reset_minutes = (usage["reset_in_seconds"] % 3600) // 60
 
@@ -113,16 +125,16 @@ class ApiUserAdmin(admin.ModelAdmin):
     @admin.action(description="Reset today's quota for selected users")
     def reset_quotas(self, request, queryset):
         from django_redis import get_redis_connection
-        from api.utils.quotas import _key
 
         r = get_redis_connection("default")
         count = 0
         for user in queryset:
-            key = _key(user.ip_address)
-            if r.delete(key):
-                count += 1
+            for subject in get_all_user_quota_subjects(user):
+                key = _key(subject)
+                if r.delete(key):
+                    count += 1
 
-        self.message_user(request, f"Reset quotas for {count} users.")
+        self.message_user(request, f"Reset {count} quota counter(s).")
 
 
 # Update existing JobAdmin to use existing download URLs for both input and output
@@ -213,20 +225,28 @@ class ApiKeyAdmin(admin.ModelAdmin):
         "key_prefix",
         "label",
         "user_ip",
+        "custom_daily_limit",
+        "effective_daily_limit_display",
         "is_active",
         "created_at",
         "last_used",
     ]
     list_filter = ["is_active", "created_at"]
     search_fields = ["label", "user__ip_address"]
-    readonly_fields = ["key_prefix", "created_at", "last_used"]
+    readonly_fields = ["key_prefix", "effective_daily_limit_display", "created_at", "last_used"]
     ordering = ["-created_at"]
 
     fieldsets = (
         (
             "Key Details",
             {
-                "fields": ("key_prefix", "label", "is_active"),
+                "fields": (
+                    "key_prefix",
+                    "label",
+                    "is_active",
+                    "custom_daily_limit",
+                    "effective_daily_limit_display",
+                ),
                 "description": (
                     "The full key is shown only once at creation time "
                     "(via the create_api_key management command). "
@@ -244,6 +264,10 @@ class ApiKeyAdmin(admin.ModelAdmin):
     def user_ip(self, obj):
         user_url = reverse("admin:api_apiuser_change", args=[obj.user.pk])
         return format_html('<a href="{}">{}</a>', user_url, obj.user.ip_address)
+
+    @admin.display(description="Effective Daily Limit")
+    def effective_daily_limit_display(self, obj):
+        return obj.effective_daily_limit
 
     @admin.action(description="Revoke selected API keys")
     def revoke_keys(self, request, queryset):
