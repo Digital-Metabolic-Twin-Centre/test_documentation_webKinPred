@@ -48,6 +48,20 @@ Minimal FastAPI service for remote GPU embedding offload.
   - Default: `0` (guarded rollout)
 - `KINFORM_PARALLEL_STREAM_ALLOW_LEGACY_FALLBACK`: fallback to legacy file-polling pipeline if stream mode errors.
   - Default: `1`
+- `KINFORM_PARALLEL_MAX_GPU_WORKERS`: cap concurrently running KinForm GPU embedding workers (`t5`, `esm2`, `esmc`).
+  - Default: `3`
+- `KINFORM_PARALLEL_T5_BATCH_SIZE`: batch size for KinForm T5 worker (file-polling mode, and fallback default for stream mode if stream-specific value is unset).
+  - Default: `1` in file-polling mode; `4` stream fallback default is used when stream-specific value is not set
+- `KINFORM_PARALLEL_ESM2_BATCH_SIZE`: batch size for KinForm ESM2 worker (file-polling mode, and fallback default for stream mode if stream-specific value is unset).
+  - Default: `1` in file-polling mode; `4` stream fallback default is used when stream-specific value is not set
+- `KINFORM_PARALLEL_ESMC_BATCH_SIZE`: batch size for KinForm ESMC worker (file-polling mode, and fallback default for stream mode if stream-specific value is unset).
+  - Default: `1` in file-polling mode; `4` stream fallback default is used when stream-specific value is not set
+- `KINFORM_PARALLEL_STREAM_T5_BATCH_SIZE`: stream-mode override for KinForm T5 worker batch size.
+  - Default: fallback to `KINFORM_PARALLEL_T5_BATCH_SIZE`, then `4`
+- `KINFORM_PARALLEL_STREAM_ESM2_BATCH_SIZE`: stream-mode override for KinForm ESM2 worker batch size.
+  - Default: fallback to `KINFORM_PARALLEL_ESM2_BATCH_SIZE`, then `4`
+- `KINFORM_PARALLEL_STREAM_ESMC_BATCH_SIZE`: stream-mode override for KinForm ESMC worker batch size.
+  - Default: fallback to `KINFORM_PARALLEL_ESMC_BATCH_SIZE`, then `4`
 - `KINFORM_PARALLEL_RESIDUE_CACHE_GB`: GPU-side residue cache budget in GB.
   - Default: `4`
 - `KINFORM_PARALLEL_SPILL_DIR`: first spill target for overflow residue matrices.

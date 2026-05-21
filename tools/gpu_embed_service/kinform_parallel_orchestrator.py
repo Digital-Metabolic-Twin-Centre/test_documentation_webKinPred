@@ -78,6 +78,16 @@ def _env_float(name: str, default: float) -> float:
         return float(default)
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return int(default)
+    try:
+        return int(str(raw).strip())
+    except Exception:
+        return int(default)
+
+
 def _pseq_retry_batch_plan(env: dict[str, str]) -> list[int]:
     """
     Build pseq retry batch sizes from the configured starting batch size.
@@ -893,6 +903,10 @@ def _run_kinform_parallel_pipeline_file_polling(
         / "pseq2sites_stream_worker.py"
     ).resolve()
     pseq_retry_plan = _pseq_retry_batch_plan(env)
+    t5_batch_size = max(1, _env_int("KINFORM_PARALLEL_T5_BATCH_SIZE", 1))
+    esm2_batch_size = max(1, _env_int("KINFORM_PARALLEL_ESM2_BATCH_SIZE", 1))
+    esmc_batch_size = max(1, _env_int("KINFORM_PARALLEL_ESMC_BATCH_SIZE", 1))
+    max_gpu_workers = max(1, _env_int("KINFORM_PARALLEL_MAX_GPU_WORKERS", 3))
 
     workers: dict[str, WorkerState] = {
         _T5_FAMILY: WorkerState(name=_T5_FAMILY),
@@ -900,6 +914,18 @@ def _run_kinform_parallel_pipeline_file_polling(
         _ESMC_FAMILY: WorkerState(name=_ESMC_FAMILY),
         _PSEQ_WORKER: WorkerState(name=_PSEQ_WORKER),
     }
+    _log(
+        env,
+        "info",
+        (
+            "launch config "
+            f"max_gpu_workers={max_gpu_workers} "
+            f"batch_t5={t5_batch_size} "
+            f"batch_esm2={esm2_batch_size} "
+            f"batch_esmc={esmc_batch_size}"
+        ),
+        job_id=job_id,
+    )
 
     def needed_ids(worker_name: str, bs_scores: dict[str, np.ndarray]) -> set[str]:
         if worker_name == _T5_FAMILY:
@@ -930,7 +956,7 @@ def _run_kinform_parallel_pipeline_file_polling(
                 "--id_to_seq_file",
                 str(id_to_seq_pkl),
                 "--batch_size",
-                "1",
+                str(t5_batch_size),
                 "--setting",
                 "residue+mean",
                 "--layers",
@@ -953,7 +979,7 @@ def _run_kinform_parallel_pipeline_file_polling(
                 "--id_to_seq_file",
                 str(id_to_seq_pkl),
                 "--batch_size",
-                "1",
+                str(esm2_batch_size),
             ]
         if worker_name == _ESMC_FAMILY:
             return [
@@ -971,7 +997,7 @@ def _run_kinform_parallel_pipeline_file_polling(
                 "--id_to_seq_file",
                 str(id_to_seq_pkl),
                 "--batch_size",
-                "1",
+                str(esmc_batch_size),
             ]
         if worker_name == _PSEQ_WORKER:
             if pseq_batch_size is None:
@@ -990,8 +1016,21 @@ def _run_kinform_parallel_pipeline_file_polling(
             ]
         raise RuntimeError(f"Unknown KinForm worker '{worker_name}'.")
 
+    gpu_workers = (_T5_FAMILY, _ESM2_FAMILY, _ESMC_FAMILY)
+    launch_order = (_PSEQ_WORKER, _T5_FAMILY, _ESM2_FAMILY, _ESMC_FAMILY)
+
+    def active_gpu_workers() -> int:
+        return sum(1 for name in gpu_workers if workers[name].process is not None)
+
+    def can_launch_worker(worker_name: str) -> bool:
+        if worker_name not in gpu_workers:
+            return True
+        return active_gpu_workers() < max_gpu_workers
+
     def launch_worker(worker_name: str, bs_scores: dict[str, np.ndarray]) -> bool:
         state = workers[worker_name]
+        if not can_launch_worker(worker_name):
+            return False
         seq_ids_to_run = needed_ids(worker_name, bs_scores)
         if not seq_ids_to_run:
             return False
@@ -1061,8 +1100,7 @@ def _run_kinform_parallel_pipeline_file_polling(
             )
         max_attempts = len(pseq_retry_plan) if worker_name == _PSEQ_WORKER else 2
         if remaining and state.attempts < max_attempts:
-            launch_worker(worker_name, bs_scores)
-            return True
+            return launch_worker(worker_name, bs_scores)
         if remaining:
             raise RuntimeError(
                 f"worker={worker_name} failed after retry; remaining seq_ids={sorted(remaining)}"
@@ -1070,7 +1108,7 @@ def _run_kinform_parallel_pipeline_file_polling(
         return True
 
     scores = score_cache.read()
-    for name in workers:
+    for name in launch_order:
         launch_worker(name, scores)
 
     poll_interval_seconds = 0.5
@@ -1121,7 +1159,8 @@ def _run_kinform_parallel_pipeline_file_polling(
                 if poll_worker(name, scores):
                     had_activity = True
 
-            for name, state in workers.items():
+            for name in launch_order:
+                state = workers[name]
                 if state.process is None:
                     if launch_worker(name, scores):
                         had_activity = True
@@ -1321,6 +1360,28 @@ def _run_kinform_parallel_pipeline_stream(
         / "pseq2sites_stream_worker.py"
     ).resolve()
     pseq_retry_plan = _pseq_retry_batch_plan(env)
+    t5_batch_size = max(
+        1,
+        _env_int(
+            "KINFORM_PARALLEL_STREAM_T5_BATCH_SIZE",
+            _env_int("KINFORM_PARALLEL_T5_BATCH_SIZE", 4),
+        ),
+    )
+    esm2_batch_size = max(
+        1,
+        _env_int(
+            "KINFORM_PARALLEL_STREAM_ESM2_BATCH_SIZE",
+            _env_int("KINFORM_PARALLEL_ESM2_BATCH_SIZE", 4),
+        ),
+    )
+    esmc_batch_size = max(
+        1,
+        _env_int(
+            "KINFORM_PARALLEL_STREAM_ESMC_BATCH_SIZE",
+            _env_int("KINFORM_PARALLEL_ESMC_BATCH_SIZE", 4),
+        ),
+    )
+    max_gpu_workers = max(1, _env_int("KINFORM_PARALLEL_MAX_GPU_WORKERS", 3))
 
     workers: dict[str, WorkerState] = {
         _T5_FAMILY: WorkerState(name=_T5_FAMILY),
@@ -1328,6 +1389,18 @@ def _run_kinform_parallel_pipeline_stream(
         _ESMC_FAMILY: WorkerState(name=_ESMC_FAMILY),
         _PSEQ_WORKER: WorkerState(name=_PSEQ_WORKER),
     }
+    _log(
+        env,
+        "info",
+        (
+            "stream launch config "
+            f"max_gpu_workers={max_gpu_workers} "
+            f"batch_t5={t5_batch_size} "
+            f"batch_esm2={esm2_batch_size} "
+            f"batch_esmc={esmc_batch_size}"
+        ),
+        job_id=job_id,
+    )
     weighted_retry_errors: dict[tuple[str, str, str], int] = {}
     weighted_compute_count_total = 0
     weighted_compute_seconds_total = 0.0
@@ -1524,7 +1597,7 @@ def _run_kinform_parallel_pipeline_stream(
                 "--id_to_seq_file",
                 str(id_to_seq_pkl),
                 "--batch_size",
-                "4",
+                str(t5_batch_size),
                 "--setting",
                 "residue+mean",
                 "--layers",
@@ -1548,7 +1621,7 @@ def _run_kinform_parallel_pipeline_stream(
                 "--id_to_seq_file",
                 str(id_to_seq_pkl),
                 "--batch_size",
-                "4",
+                str(esm2_batch_size),
                 *common_stream,
             ]
         if worker_name == _ESMC_FAMILY:
@@ -1567,7 +1640,7 @@ def _run_kinform_parallel_pipeline_stream(
                 "--id_to_seq_file",
                 str(id_to_seq_pkl),
                 "--batch_size",
-                "4",
+                str(esmc_batch_size),
                 *common_stream,
             ]
         if worker_name == _PSEQ_WORKER:
@@ -1592,8 +1665,21 @@ def _run_kinform_parallel_pipeline_stream(
             ]
         raise RuntimeError(f"Unknown KinForm worker '{worker_name}'.")
 
+    gpu_workers = (_T5_FAMILY, _ESM2_FAMILY, _ESMC_FAMILY)
+    launch_order = (_PSEQ_WORKER, _T5_FAMILY, _ESM2_FAMILY, _ESMC_FAMILY)
+
+    def active_gpu_workers() -> int:
+        return sum(1 for name in gpu_workers if workers[name].process is not None)
+
+    def can_launch_worker(worker_name: str) -> bool:
+        if worker_name not in gpu_workers:
+            return True
+        return active_gpu_workers() < max_gpu_workers
+
     def launch_worker(worker_name: str) -> bool:
         state = workers[worker_name]
+        if not can_launch_worker(worker_name):
+            return False
         seq_ids_to_run = needed_ids(worker_name)
         if not seq_ids_to_run:
             return False
@@ -1718,8 +1804,7 @@ def _run_kinform_parallel_pipeline_stream(
 
         max_attempts = len(pseq_retry_plan) if worker_name == _PSEQ_WORKER else 2
         if remaining and state.attempts < max_attempts:
-            launch_worker(worker_name)
-            return True
+            return launch_worker(worker_name)
 
         if remaining:
             raise RuntimeError(
@@ -1795,8 +1880,8 @@ def _run_kinform_parallel_pipeline_stream(
                         raise
         return derived
 
-    # Initial launch for all 4 workers.
-    for name in workers:
+    # Initial launch (subject to max_gpu_workers cap).
+    for name in launch_order:
         launch_worker(name)
 
     progress_interval_seconds = 10.0
@@ -1966,7 +2051,8 @@ def _run_kinform_parallel_pipeline_stream(
                 if poll_worker(name):
                     had_activity = True
 
-            for name, state in workers.items():
+            for name in launch_order:
+                state = workers[name]
                 if state.process is None:
                     if launch_worker(name):
                         had_activity = True
