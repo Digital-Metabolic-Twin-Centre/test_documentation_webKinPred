@@ -106,6 +106,8 @@ services:
       - ./models/KinForm/results/trained_models:/app/models/KinForm/results/trained_models:ro
       - ./models/CataPro:/app/models/CataPro:ro
       - ./models/CatPred:/app/models/CatPred:ro
+      - ./models/RealKcat/model_weights:/app/models/RealKcat/model_weights:ro
+      - ./models/IECata:/app/models/IECata:ro
     environment:
       <<: *common-env
       WEBKINPRED_SERVICE: celery
