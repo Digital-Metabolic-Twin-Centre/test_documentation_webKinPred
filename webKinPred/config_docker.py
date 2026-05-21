@@ -28,6 +28,8 @@ PYTHON_PATHS = {
     "esmc": "/opt/conda/envs/esmc/bin/python",
     "t5": "/opt/conda/envs/prot_t5/bin/python",
     "pseq2sites": "/opt/conda/envs/pseq2sites/bin/python",
+    "IECata": "/opt/conda/envs/iecata_env/bin/python",
+    "RealKcat": "/opt/conda/envs/realkcat_env/bin/python",
 }
 
 DATA_PATHS = build_data_paths(BASE_PATH)

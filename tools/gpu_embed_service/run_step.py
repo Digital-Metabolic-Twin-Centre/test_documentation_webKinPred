@@ -13,6 +13,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from webKinPred.settings import MEDIA_ROOT
+
 
 STEP_CHOICES = (
     "kinform_t5_full",
@@ -24,6 +26,7 @@ STEP_CHOICES = (
     "catpred_embed_kcat",
     "catpred_embed_km",
     "omniesi_esm2",
+    "iecata_prot_t5_residues",
 )
 
 
@@ -539,6 +542,39 @@ def _run_omniesi_esm2(env: dict[str, str], seq_map_json: Path) -> None:
         env,
     )
 
+def _run_iecata_prot_t5_residues(env: dict[str, str], seq_map_json: Path) -> None:
+    iecata_python = (
+        os.environ.get("IECATA_EMBED_PYTHON")
+        or os.environ.get("IECATA_PYTHON")
+        or env.get("KINFORM_T5_PATH")          # reuse the T5 env if no dedicated one
+        or sys.executable
+    )
+    worker_script = (
+        Path(env["GPU_REPO_ROOT"]) / "tools" / "gpu_embed_service" / "iecata_prot_t5_residues_worker.py"
+    ).resolve()
+    _ensure_exists(worker_script, "iecata_prot_t5_residues_worker.py")
+
+    cache_dir = (
+        Path(env["KINFORM_MEDIA_PATH"]) / "sequence_info" / "iecata_prot_t5_residues"
+    ).resolve()
+    batch_size = _env_int("IECATA_GPU_PROT_T5_BATCH_SIZE", 4)
+    async_workers = _env_int("GPU_EMBED_CACHE_ASYNC_WORKERS", 8)
+
+    _run(
+        [
+            iecata_python,
+            str(worker_script),
+            "--seq-id-to-seq-file",
+            str(seq_map_json),
+            "--cache-dir",
+            str(cache_dir),
+            "--batch-size",
+            str(batch_size),
+            "--async-workers",
+            str(async_workers),
+        ],
+        env,
+    )
 
 def run_step(
     step: str,
@@ -591,6 +627,8 @@ def run_step(
             _run_catpred_embed(env, seq_map_json, parameter="km")
         elif step == "omniesi_esm2":
             _run_omniesi_esm2(env, seq_map_json)
+        elif step == "iecata_prot_t5_residues":
+            _run_iecata_prot_t5_residues(env, seq_map_json)
         else:
             raise RuntimeError(f"Unsupported step: {step}")
     finally:

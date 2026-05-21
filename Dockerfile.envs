@@ -101,6 +101,21 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
     mamba create -n omniesi_env python=3.8 -c conda-forge -y \
     && conda run -n omniesi_env pip install -r docker-requirements/omniesi_requirements.txt
 
+FROM base AS env-iecata
+COPY docker-requirements/iecata_requirements.txt ./docker-requirements/
+RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
+    --mount=type=cache,id=webkinpred-pip-iecata,target=/root/.cache/pip,sharing=locked \
+    mamba create -n iecata_env python=3.8 \
+    && conda run -n iecata_env pip install \
+        -r docker-requirements/iecata_requirements.txt
+
+FROM base AS env-realkcat
+COPY docker-requirements/realkcat_requirements.txt ./docker-requirements/
+RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
+    --mount=type=cache,id=webkinpred-pip-py312,target=/root/.cache/pip,sharing=locked \
+    mamba create -n realkcat_env python=3.9 -c conda-forge -y \
+    && conda run -n realkcat_env pip install -r docker-requirements/realkcat_requirements.txt
+
 FROM base AS env-pseq2sites
 RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
     --mount=type=cache,id=webkinpred-pip-py37,target=/root/.cache/pip,sharing=locked \
@@ -144,6 +159,8 @@ COPY --from=env-catapro    /opt/conda/envs/catapro_env   /opt/conda/envs/catapro
 COPY --from=env-catpred    /opt/conda/envs/catpred_env   /opt/conda/envs/catpred_env
 COPY --from=env-mmisakm   /opt/conda/envs/mmisakm_env  /opt/conda/envs/mmisakm_env
 COPY --from=env-omniesi   /opt/conda/envs/omniesi_env  /opt/conda/envs/omniesi_env
+COPY --from=env-iecata    /opt/conda/envs/iecata_env   /opt/conda/envs/iecata_env
+COPY --from=env-realkcat   /opt/conda/envs/realkcat_env  /opt/conda/envs/realkcat_env
 COPY --from=env-pseq2sites /opt/conda/envs/pseq2sites    /opt/conda/envs/pseq2sites
 COPY --from=env-esm        /opt/conda/envs/esm           /opt/conda/envs/esm
 COPY --from=env-esmc       /opt/conda/envs/esmc          /opt/conda/envs/esmc

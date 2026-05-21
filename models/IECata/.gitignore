@@ -1,0 +1,14 @@
+.idea/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+
+# Training and evaluation outputs
+result/independent_test/
+
+# Generated or source datasets not needed for inference
+datasets/
+Dataset collection/
