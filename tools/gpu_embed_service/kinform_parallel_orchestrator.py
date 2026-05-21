@@ -907,6 +907,7 @@ def _run_kinform_parallel_pipeline_file_polling(
     esm2_batch_size = max(1, _env_int("KINFORM_PARALLEL_ESM2_BATCH_SIZE", 1))
     esmc_batch_size = max(1, _env_int("KINFORM_PARALLEL_ESMC_BATCH_SIZE", 1))
     max_gpu_workers = max(1, _env_int("KINFORM_PARALLEL_MAX_GPU_WORKERS", 3))
+    include_pseq_in_gpu_cap = _env_bool("KINFORM_PARALLEL_INCLUDE_PSEQ_IN_GPU_CAP", True)
 
     workers: dict[str, WorkerState] = {
         _T5_FAMILY: WorkerState(name=_T5_FAMILY),
@@ -920,6 +921,7 @@ def _run_kinform_parallel_pipeline_file_polling(
         (
             "launch config "
             f"max_gpu_workers={max_gpu_workers} "
+            f"include_pseq_in_gpu_cap={include_pseq_in_gpu_cap} "
             f"batch_t5={t5_batch_size} "
             f"batch_esm2={esm2_batch_size} "
             f"batch_esmc={esmc_batch_size}"
@@ -1016,8 +1018,12 @@ def _run_kinform_parallel_pipeline_file_polling(
             ]
         raise RuntimeError(f"Unknown KinForm worker '{worker_name}'.")
 
-    gpu_workers = (_T5_FAMILY, _ESM2_FAMILY, _ESMC_FAMILY)
-    launch_order = (_PSEQ_WORKER, _T5_FAMILY, _ESM2_FAMILY, _ESMC_FAMILY)
+    gpu_workers = (
+        (_T5_FAMILY, _ESM2_FAMILY, _ESMC_FAMILY, _PSEQ_WORKER)
+        if include_pseq_in_gpu_cap
+        else (_T5_FAMILY, _ESM2_FAMILY, _ESMC_FAMILY)
+    )
+    launch_order = (_T5_FAMILY, _PSEQ_WORKER, _ESM2_FAMILY, _ESMC_FAMILY)
 
     def active_gpu_workers() -> int:
         return sum(1 for name in gpu_workers if workers[name].process is not None)
@@ -1382,6 +1388,7 @@ def _run_kinform_parallel_pipeline_stream(
         ),
     )
     max_gpu_workers = max(1, _env_int("KINFORM_PARALLEL_MAX_GPU_WORKERS", 3))
+    include_pseq_in_gpu_cap = _env_bool("KINFORM_PARALLEL_INCLUDE_PSEQ_IN_GPU_CAP", True)
 
     workers: dict[str, WorkerState] = {
         _T5_FAMILY: WorkerState(name=_T5_FAMILY),
@@ -1395,6 +1402,7 @@ def _run_kinform_parallel_pipeline_stream(
         (
             "stream launch config "
             f"max_gpu_workers={max_gpu_workers} "
+            f"include_pseq_in_gpu_cap={include_pseq_in_gpu_cap} "
             f"batch_t5={t5_batch_size} "
             f"batch_esm2={esm2_batch_size} "
             f"batch_esmc={esmc_batch_size}"
@@ -1665,8 +1673,12 @@ def _run_kinform_parallel_pipeline_stream(
             ]
         raise RuntimeError(f"Unknown KinForm worker '{worker_name}'.")
 
-    gpu_workers = (_T5_FAMILY, _ESM2_FAMILY, _ESMC_FAMILY)
-    launch_order = (_PSEQ_WORKER, _T5_FAMILY, _ESM2_FAMILY, _ESMC_FAMILY)
+    gpu_workers = (
+        (_T5_FAMILY, _ESM2_FAMILY, _ESMC_FAMILY, _PSEQ_WORKER)
+        if include_pseq_in_gpu_cap
+        else (_T5_FAMILY, _ESM2_FAMILY, _ESMC_FAMILY)
+    )
+    launch_order = (_T5_FAMILY, _PSEQ_WORKER, _ESM2_FAMILY, _ESMC_FAMILY)
 
     def active_gpu_workers() -> int:
         return sum(1 for name in gpu_workers if workers[name].process is not None)
