@@ -9,6 +9,7 @@ Environment variables injected by SubprocessEngineConfig:
     IECATA_EMBED_DIR — path to media/sequence_info/iecata_prot_t5_residues/
     IECATA_PROTT5_NAME - Hugging Face model name for ProtT5 (optional)
     IECATA_PROTT5_LOCAL_PATH - local ProtT5 tokenizer/model path (optional)
+    KINFORM_T5_MODEL_PATH - shared local ProtT5 path used by UniKP/KinForm
 
 Input JSON (webKinPred contract):
     {
@@ -73,12 +74,28 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 def load_prott5():
     from transformers import T5EncoderModel, T5Tokenizer
 
-    local_path = os.environ.get("IECATA_PROTT5_LOCAL_PATH")
-    model_name = os.environ.get("IECATA_PROTT5_NAME", "Rostlab/prot_t5_xl_uniref50")
+    local_path = str(os.environ.get("IECATA_PROTT5_LOCAL_PATH", "")).strip()
+    shared_path = str(os.environ.get("KINFORM_T5_MODEL_PATH", "")).strip()
+    model_name = str(
+        os.environ.get("IECATA_PROTT5_NAME", "Rostlab/prot_t5_xl_uniref50")
+    ).strip()
 
-    source = local_path or model_name
+    # Keep IECata aligned with UniKP/KinForm ProtT5 resolution:
+    # explicit IECata override -> shared KinForm path -> UniKP local paths -> HF id.
+    docker_unikp_path = Path("/app/models/UniKP-main/models/protT5_xl/prot_t5_xl_uniref50")
+    repo_unikp_path = (
+        Path(__file__).resolve().parents[1]
+        / "UniKP-main"
+        / "models"
+        / "protT5_xl"
+        / "prot_t5_xl_uniref50"
+    )
+    local_candidates = [local_path, shared_path, str(docker_unikp_path), str(repo_unikp_path)]
+    source = next((p for p in local_candidates if p and Path(p).exists()), model_name)
+    local_only = Path(source).exists()
+
     tokenizer = T5Tokenizer.from_pretrained(source, do_lower_case=False)
-    model = T5EncoderModel.from_pretrained(source)
+    model = T5EncoderModel.from_pretrained(source, local_files_only=local_only)
     model = model.to(DEVICE).eval()
     if torch.cuda.is_available():
         model = model.half()
@@ -327,4 +344,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
