@@ -13,8 +13,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-from webKinPred.settings import MEDIA_ROOT
-
 
 STEP_CHOICES = (
     "kinform_t5_full",
