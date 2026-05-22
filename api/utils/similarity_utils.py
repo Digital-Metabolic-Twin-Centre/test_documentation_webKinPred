@@ -326,7 +326,7 @@ def calculate_average_similarity(identity_values: Dict[str, float]) -> float:
         return 0.0
 
     total_similarity = sum(identity_values.values())
-    return round(total_similarity / total_seqs * 100, 2)
+    return round(total_similarity / total_seqs, 2)
 
 
 def cleanup_temporary_files(*file_paths: str) -> None:

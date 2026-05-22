@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useCallback } from 'react';
+import { useState, useMemo, useRef, useCallback } from 'react';
 import { Bar } from 'react-chartjs-2';
 import { Chart as ChartJS, BarElement, CategoryScale, LinearScale, Tooltip, Legend } from 'chart.js';
 import { Accordion, Row, Col } from 'react-bootstrap';
@@ -210,14 +210,20 @@ function SequenceSimilarityHistogram({ similarityData }) {
         ctx.shadowColor  = isDark ? 'rgba(0,0,0,0.85)' : 'rgba(255,255,255,0.95)';
         ctx.fillStyle    = barColor;
 
+        const lineH = 11 * S;  // gap between the two label lines
         meta.data.forEach((bar, i) => {
           const value = dataValues[i];
+          const count = countValues[i];
           if (!value || value < 0.5) return;
-          ctx.fillText(
-            `${value.toFixed(1)}%`,
-            hPad + bar.x * S,
-            titleH + bar.y * S - 5 * S,
-          );
+          const bx = hPad + bar.x * S;
+          const by = titleH + bar.y * S - 5 * S;
+          ctx.fillText(`${value.toFixed(1)}%`, bx, by);
+          ctx.font      = `400 ${8 * S}px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif`;
+          ctx.fillStyle = isDark ? 'rgba(180,230,230,0.75)' : 'rgba(14,90,90,0.65)';
+          ctx.fillText(`(n=${count})`, bx, by + lineH);
+          // restore for next iteration
+          ctx.font      = `600 ${9.5 * S}px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif`;
+          ctx.fillStyle = barColor;
         });
 
         ctx.shadowBlur  = 0;
