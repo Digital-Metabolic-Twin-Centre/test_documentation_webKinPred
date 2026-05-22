@@ -73,8 +73,11 @@ GPU_OFFLOAD_METHOD_TARGETS = {
     ("CatPred", "Km"),
     ("OmniESI", "kcat"),
     ("OmniESI", "Km"),
+    ("IECata", "kcat/Km"),
+    ("RealKcat", "kcat"),
+    ("RealKcat", "Km"),
 }
-NO_PERSISTENT_CACHE_METHOD_IDS = {"OmniESI", "EITLEM"}
+NO_PERSISTENT_CACHE_METHOD_IDS = {"OmniESI", "EITLEM", "IECata"}
 PREFERRED_METHOD_ORDER = [
     "UniKP",
     "TurNup",
@@ -82,6 +85,8 @@ PREFERRED_METHOD_ORDER = [
     "CataPro",
     "CatPred",
     "OmniESI",
+    "RealKcat",
+    "IECata",
     "KinForm-L",
     "KinForm-H",
     "DLKcat",
@@ -98,6 +103,8 @@ METHOD_KEY_ALIASES = {
     "catapro": "CataPro",
     "catpred": "CatPred",
     "omniesi": "OmniESI",
+    "realkcat": "RealKcat",
+    "iecata": "IECata",
     "mmisakm": "MMISA-KM",
     "dlkcat": "DLKcat",
 }

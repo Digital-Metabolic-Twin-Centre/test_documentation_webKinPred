@@ -29,7 +29,7 @@ SIMILARITY_DATASET_REGISTRY: dict[str, dict[str, object]] = {
         "db_name": "targetdb_catapro",
         "method_keys": ["CataPro"],
     },
-    "CatPred": {
+    "CatPred/OmniESI": {
         "fasta_filename": "catpred_kcat_sequences.fasta",
         "db_name": "targetdb_catpred_kcat",
         "method_keys": ["CatPred", "OmniESI"],
