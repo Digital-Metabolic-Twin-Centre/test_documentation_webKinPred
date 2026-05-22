@@ -32,7 +32,7 @@ descriptor = MethodDescriptor(
     subprocess=SubprocessEngineConfig(
         python_path_key="CatPred",
         script_key="CatPred",
-        fail_on_gpu_precompute_failure=True,
+        fail_on_gpu_precompute_failure=False,
         data_path_env={
             "CATPRED_REPO_ROOT": "CatPred",
             "CATPRED_CHECKPOINT_ROOT": "CatPred_production_checkpoints",
