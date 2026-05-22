@@ -307,6 +307,56 @@ class EmbeddingPlanServiceTests(unittest.TestCase):
             self.assertEqual(plan.need_computation, 1)
             self.assertEqual(eps.gpu_step_work(plan), {"omniesi_esm2": ["sid_2"]})
 
+    def test_realkcat_gpu_supported_with_mean_esm2_cache(self):
+        """RealKcat uses a dedicated persistent ESM2 last-layer mean cache."""
+        with tempfile.TemporaryDirectory(prefix="emb_plan_realkcat_") as tmp:
+            tmp_path = Path(tmp)
+            media = tmp_path / "media"
+            tools = tmp_path / "tools"
+
+            _touch(media / "sequence_info" / "esm2_layer_last_mean" / "sid_1.npy")
+
+            with patch.object(eps, "resolve_media_and_tools", return_value=(media, tools)):
+                with patch.object(eps, "resolve_seq_ids_via_cli", return_value=["sid_1", "sid_2"]):
+                    plan = eps.build_embedding_plan(
+                        method_key="RealKcat",
+                        target="kcat",
+                        sequences=["ACD", "EFG"],
+                        env={},
+                    )
+
+            self.assertTrue(plan.gpu_supported)
+            self.assertEqual(plan.profile, "realkcat_esm2_last_mean")
+            self.assertEqual(plan.total, 2)
+            self.assertEqual(plan.cached_already, 1)
+            self.assertEqual(plan.need_computation, 1)
+            self.assertEqual(eps.gpu_step_work(plan), {"realkcat_esm2_last_mean": ["sid_2"]})
+
+    def test_iecata_gpu_supported_with_residue_cache(self):
+        """IECata uses ephemeral full-residue ProtT5 cache family."""
+        with tempfile.TemporaryDirectory(prefix="emb_plan_iecata_") as tmp:
+            tmp_path = Path(tmp)
+            media = tmp_path / "media"
+            tools = tmp_path / "tools"
+
+            _touch(media / "sequence_info" / "iecata_prot_t5_residues" / "sid_1.npy")
+
+            with patch.object(eps, "resolve_media_and_tools", return_value=(media, tools)):
+                with patch.object(eps, "resolve_seq_ids_via_cli", return_value=["sid_1", "sid_2"]):
+                    plan = eps.build_embedding_plan(
+                        method_key="IECata",
+                        target="kcat/Km",
+                        sequences=["ACD", "EFG"],
+                        env={},
+                    )
+
+            self.assertTrue(plan.gpu_supported)
+            self.assertEqual(plan.profile, "iecata_prot_t5_residues")
+            self.assertEqual(plan.total, 2)
+            self.assertEqual(plan.cached_already, 1)
+            self.assertEqual(plan.need_computation, 1)
+            self.assertEqual(eps.gpu_step_work(plan), {"iecata_prot_t5_residues": ["sid_2"]})
+
 
 if __name__ == "__main__":
     unittest.main()

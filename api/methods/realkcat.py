@@ -22,8 +22,11 @@ descriptor = MethodDescriptor(
     subprocess=SubprocessEngineConfig(
         python_path_key="RealKcat",
         script_key="RealKcat",
-        data_path_env={"REALKCAT_DATA": "RealKcat_DATA"},
+        data_path_env={
+            "REALKCAT_DATA": "RealKcat_DATA",
+            "REALKCAT_EMBED_CACHE_DIR": "realkcat_esm2_last_mean",
+        },
     ),
-    
-    embeddings_used=["omniesi_esm2"],  # Reuse existing ESM2 cache
+
+    embeddings_used=["realkcat_esm2_last_mean"],
 )

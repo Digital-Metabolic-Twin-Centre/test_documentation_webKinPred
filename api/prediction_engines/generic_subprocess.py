@@ -38,6 +38,7 @@ from api.prediction_engines.subprocess_runner import run_prediction_subprocess
 from api.utils.convert_to_mol import convert_to_mol
 from webKinPred.settings import MEDIA_ROOT
 _log = logging.getLogger(__name__)
+_SEQ_ID_ATTACH_METHOD_KEYS = {"OmniESI", "RealKcat", "IECata"}
 
 
 def run_generic_subprocess_prediction(
@@ -113,7 +114,7 @@ def run_generic_subprocess_prediction(
     valid_sequences = [str(row.get("sequence", "")) for row in valid_rows]
     embedding_sequences = valid_sequences if desc.embeddings_used else None
 
-    if desc.key == "OmniESI":
+    if _should_attach_seq_ids(desc):
         _attach_seq_ids_to_rows(desc=desc, rows=valid_rows, sequences=valid_sequences, env=env)
 
     if embedding_sequences:
@@ -414,6 +415,11 @@ def _build_subprocess_env(desc: MethodDescriptor) -> dict[str, str]:
     return env
 
 
+def _should_attach_seq_ids(desc: MethodDescriptor) -> bool:
+    """Return True when a subprocess method reads shared embedding caches by seq_id."""
+    return str(getattr(desc, "key", "")).strip() in _SEQ_ID_ATTACH_METHOD_KEYS
+
+
 def _attach_seq_ids_to_rows(
     *,
     desc: MethodDescriptor,
@@ -423,10 +429,10 @@ def _attach_seq_ids_to_rows(
 ) -> None:
     """Attach shared seqmap IDs for subprocess scripts that consume them.
 
-    Most generic subprocess adapters resolve sequence IDs internally. OmniESI
-    intentionally does not: its local fallback cache uses the same seq_id key
-    planned for remote GPU precompute, so the platform passes that key in the
-    payload row.
+    Most generic subprocess adapters resolve sequence IDs internally. Methods
+    that share GPU-precomputed cache families (OmniESI, RealKcat, IECata)
+    intentionally consume the platform seq_id directly in subprocess payloads
+    so local fallback and remote precompute use exactly the same cache key.
     """
     if not rows:
         return

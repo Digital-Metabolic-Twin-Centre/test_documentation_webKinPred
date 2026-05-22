@@ -51,6 +51,7 @@ def method_env_keys(method_key: str) -> tuple[str | None, str | None]:
         "KinForm-H": ("KINFORM_MEDIA_PATH", "KINFORM_TOOLS_PATH"),
         "KinForm-L": ("KINFORM_MEDIA_PATH", "KINFORM_TOOLS_PATH"),
         "IECata": ("IECATA_MEDIA_PATH", "IECATA_TOOLS_PATH"),
+        "RealKcat": ("REALKCAT_MEDIA_PATH", "REALKCAT_TOOLS_PATH"),
     }
     return mapping.get(method_key, (None, None))
 
@@ -229,7 +230,13 @@ def expected_paths_by_seq(
         for seq_id in seq_ids:
             out[seq_id] = {str((base / f"{seq_id}.pt").resolve())}
         return out
-    
+
+    if method_key == "RealKcat":
+        base = media_path / "sequence_info" / "esm2_layer_last_mean"
+        for seq_id in seq_ids:
+            out[seq_id] = {str((base / f"{seq_id}.npy").resolve())}
+        return out
+
     if method_key == "IECata":
         base = media_path / "sequence_info" / "iecata_prot_t5_residues"
         for seq_id in seq_ids:
@@ -327,6 +334,8 @@ def _profile_for_method(method_key: str) -> tuple[str | None, bool, str | None]:
         return "catpred_embed", True, None
     if method_key == "OmniESI":
         return "omniesi_esm2", True, None
+    if method_key == "RealKcat":
+        return "realkcat_esm2_last_mean", True, None
     if method_key == "IECata":
         return "iecata_prot_t5_residues", True, None
     return None, False, "gpu_offload_not_applicable"
@@ -368,7 +377,12 @@ def _step_plans_for_profile(
         base = media_path / "sequence_info" / "omniesi_esm2"
         paths = {sid: {str((base / f"{sid}.pt").resolve())} for sid in seq_ids}
         return [_step_from_paths("omniesi_esm2", paths)]
-    
+
+    if profile == "realkcat_esm2_last_mean":
+        base = media_path / "sequence_info" / "esm2_layer_last_mean"
+        paths = {sid: {str((base / f"{sid}.npy").resolve())} for sid in seq_ids}
+        return [_step_from_paths("realkcat_esm2_last_mean", paths)]
+
     if profile == "iecata_prot_t5_residues":
         base = media_path / "sequence_info" / "iecata_prot_t5_residues"
         paths = {sid: {str((base / f"{sid}.npy").resolve())} for sid in seq_ids}

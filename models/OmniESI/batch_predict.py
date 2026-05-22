@@ -163,7 +163,7 @@ logger.debug("OmniESI code root resolved to: %s", ROOT_DIR)
 # ============================================================================
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-DELETE_EMBEDDINGS_AFTER_RUN = (
+DEFAULT_DELETE_EMBEDDINGS_AFTER_RUN = (
     str(os.environ.get("OMNIESI_DELETE_EMBEDDINGS_AFTER_RUN", "1")).strip().lower()
     in {"1", "true", "yes", "on"}
 )
@@ -282,8 +282,8 @@ def _save_shared_embedding(seq_id: str | None, embedding: torch.Tensor) -> None:
         logger.warning("Embedding cache write failed for seq_id=%r: %s", seq_id, exc)
 
 
-def _cleanup_shared_embeddings(seq_ids: list[str]) -> None:
-    if not DELETE_EMBEDDINGS_AFTER_RUN:
+def _cleanup_shared_embeddings(seq_ids: list[str], *, cleanup_enabled: bool) -> None:
+    if not cleanup_enabled:
         return
     cleanup_ids = {str(sid).strip() for sid in seq_ids if str(sid).strip()}
     for seq_id in cleanup_ids:
@@ -297,6 +297,26 @@ def _cleanup_shared_embeddings(seq_ids: list[str]) -> None:
         remove_manifest_entries(OMNIESI_EMBED_CACHE_DIR, cleanup_ids)
     except Exception as exc:
         logger.warning("Embedding manifest cleanup failed: %s", exc)
+
+
+def _payload_cleanup_flag(payload: dict[str, Any]) -> bool:
+    """
+    Resolve cleanup policy from payload params with env-backed default.
+
+    params.cleanup_embeddings_after_run is an internal webKinPred orchestration
+    flag used for multi-stage jobs that should keep shared embeddings between
+    stages and clean them after the last stage.
+    """
+    params = payload.get("params") or {}
+    if not isinstance(params, dict) or "cleanup_embeddings_after_run" not in params:
+        return DEFAULT_DELETE_EMBEDDINGS_AFTER_RUN
+
+    raw = params.get("cleanup_embeddings_after_run")
+    if isinstance(raw, bool):
+        return raw
+    if raw is None:
+        return DEFAULT_DELETE_EMBEDDINGS_AFTER_RUN
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
 # ============================================================================
@@ -641,6 +661,7 @@ def run_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
     rows          = _safe_rows(payload)
     kinetics_type = _kinetics_type_from_payload(payload)
+    cleanup_embeddings_after_run = _payload_cleanup_flag(payload)
 
     n_total         = len(rows)
     predictions     : list[float | None] = [None] * n_total
@@ -688,7 +709,10 @@ def run_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
             valid_global_indices   = valid_indices,
         )
     finally:
-        _cleanup_shared_embeddings(touched_seq_ids)
+        _cleanup_shared_embeddings(
+            touched_seq_ids,
+            cleanup_enabled=cleanup_embeddings_after_run,
+        )
 
     for local_idx, pred in enumerate(valid_preds):
         global_idx = valid_indices[local_idx]

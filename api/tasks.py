@@ -426,6 +426,8 @@ def _execute_prediction(
     for col, kwarg_name in desc.col_to_kwarg.items():
         call_kwargs[kwarg_name] = [df[col].iloc[i] for i in valid_idx]
     call_kwargs.update(desc.target_kwargs.get(target, {}))
+    if desc.key == "OmniESI":
+        call_kwargs["cleanup_embeddings_after_run"] = True
 
     # ── 4. Run predictions ────────────────────────────────────────────────────
     output_col = desc.output_cols[target]
@@ -543,6 +545,7 @@ def _execute_both_prediction(
     km_extra: list[str] = [""] * n_rows
 
     eitlem_shared_cache = kcat_desc.key == "EITLEM" and km_desc.key == "EITLEM"
+    omniesi_shared_cache = kcat_desc.key == "OmniESI" and km_desc.key == "OmniESI"
 
     # ── 3. kcat predictions ───────────────────────────────────────────────────
     if valid_idx:
@@ -552,6 +555,8 @@ def _execute_both_prediction(
         kcat_call_kwargs.update(kcat_desc.target_kwargs.get("kcat", {}))
         if kcat_desc.key == "EITLEM":
             kcat_call_kwargs["cleanup_esm1v_embeddings"] = not eitlem_shared_cache
+        if kcat_desc.key == "OmniESI":
+            kcat_call_kwargs["cleanup_embeddings_after_run"] = not omniesi_shared_cache
 
         kcat_subset, kcat_bad = _invoke_method_prediction(
             desc=kcat_desc,
@@ -577,6 +582,8 @@ def _execute_both_prediction(
         km_call_kwargs.update(km_desc.target_kwargs.get("Km", {}))
         if km_desc.key == "EITLEM":
             km_call_kwargs["cleanup_esm1v_embeddings"] = True
+        if km_desc.key == "OmniESI":
+            km_call_kwargs["cleanup_embeddings_after_run"] = True
 
         km_subset, km_bad = _invoke_method_prediction(
             desc=km_desc,
@@ -715,6 +722,8 @@ def _execute_multi_prediction(
 
     eitlem_targets = [target for target in targets if desc_by_target[target].key == "EITLEM"]
     last_eitlem_target = eitlem_targets[-1] if eitlem_targets else None
+    omniesi_targets = [target for target in targets if desc_by_target[target].key == "OmniESI"]
+    last_omniesi_target = omniesi_targets[-1] if omniesi_targets else None
 
     for target in targets:
         desc = desc_by_target[target]
@@ -741,6 +750,8 @@ def _execute_multi_prediction(
         call_kwargs.update(desc.target_kwargs.get(target, {}))
         if desc.key == "EITLEM":
             call_kwargs["cleanup_esm1v_embeddings"] = target == last_eitlem_target
+        if desc.key == "OmniESI":
+            call_kwargs["cleanup_embeddings_after_run"] = target == last_omniesi_target
 
         try:
             pred_subset, invalid_subset = _invoke_method_prediction(

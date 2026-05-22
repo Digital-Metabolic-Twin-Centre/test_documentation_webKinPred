@@ -26,6 +26,7 @@ STEP_CHOICES = (
     "catpred_embed_kcat",
     "catpred_embed_km",
     "omniesi_esm2",
+    "realkcat_esm2_last_mean",
     "iecata_prot_t5_residues",
 )
 
@@ -542,6 +543,44 @@ def _run_omniesi_esm2(env: dict[str, str], seq_map_json: Path) -> None:
         env,
     )
 
+
+def _run_realkcat_esm2_last_mean(env: dict[str, str], seq_map_json: Path) -> None:
+    realkcat_python = (
+        os.environ.get("REALKCAT_EMBED_PYTHON")
+        or os.environ.get("REALKCAT_PYTHON")
+        or os.environ.get("OMNIESI_EMBED_PYTHON")
+        or os.environ.get("OMNIESI_PYTHON")
+        or sys.executable
+    )
+    worker_script = (
+        Path(env["GPU_REPO_ROOT"]) / "tools" / "gpu_embed_service" / "realkcat_esm2_last_mean_worker.py"
+    ).resolve()
+    _ensure_exists(worker_script, "realkcat_esm2_last_mean_worker.py")
+
+    cache_dir = (Path(env["KINFORM_MEDIA_PATH"]) / "sequence_info" / "esm2_layer_last_mean").resolve()
+    token_budget = _env_int("REALKCAT_GPU_ESM_TOKEN_BUDGET", 6000)
+    max_batch = _env_int("REALKCAT_GPU_ESM_MAX_BATCH", 8)
+    async_workers = _env_int("GPU_EMBED_CACHE_ASYNC_WORKERS", 8)
+
+    _run(
+        [
+            realkcat_python,
+            str(worker_script),
+            "--seq-id-to-seq-file",
+            str(seq_map_json),
+            "--cache-dir",
+            str(cache_dir),
+            "--token-budget",
+            str(token_budget),
+            "--max-batch",
+            str(max_batch),
+            "--async-workers",
+            str(async_workers),
+        ],
+        env,
+    )
+
+
 def _run_iecata_prot_t5_residues(env: dict[str, str], seq_map_json: Path) -> None:
     iecata_python = (
         os.environ.get("IECATA_EMBED_PYTHON")
@@ -627,6 +666,8 @@ def run_step(
             _run_catpred_embed(env, seq_map_json, parameter="km")
         elif step == "omniesi_esm2":
             _run_omniesi_esm2(env, seq_map_json)
+        elif step == "realkcat_esm2_last_mean":
+            _run_realkcat_esm2_last_mean(env, seq_map_json)
         elif step == "iecata_prot_t5_residues":
             _run_iecata_prot_t5_residues(env, seq_map_json)
         else:

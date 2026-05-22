@@ -42,6 +42,7 @@ import os
 import re
 import sys
 import warnings
+from pathlib import Path
 from typing import Optional
 import numpy as np
 import pandas as pd
@@ -53,6 +54,15 @@ warnings.filterwarnings("ignore")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
+REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT_STR = str(REPO_ROOT)
+if REPO_ROOT_STR not in sys.path:
+    sys.path.insert(0, REPO_ROOT_STR)
+
+try:
+    from tools.gpu_embed_service.cache_io import remove_manifest_entries
+except Exception:  # pragma: no cover - fallback for minimal local runtimes
+    remove_manifest_entries = None  # type: ignore[assignment]
 
 from models import DrugBAN
 from utils import set_seed, prottrans_graph_collate_func
@@ -151,6 +161,28 @@ def ensure_cached_embedding(
     embedding = encode_protein_sequence(sequence, tokenizer, model)
     np.save(npy_path, embedding)
     return npy_path
+
+
+def cleanup_cached_embeddings(embed_dir: str, seq_ids: set[str]) -> None:
+    """Delete ephemeral IECata residue embeddings and manifest entries."""
+    if not embed_dir or not seq_ids:
+        return
+
+    cache_dir = Path(embed_dir).resolve()
+    for seq_id in seq_ids:
+        try:
+            (cache_dir / f"{seq_id}.npy").unlink(missing_ok=True)
+        except OSError:
+            continue
+
+    if remove_manifest_entries is None:
+        return
+
+    try:
+        remove_manifest_entries(cache_dir, seq_ids)
+    except Exception:
+        pass
+
 # ---------------------------------------------------------------------------
 # Dataset — bypasses Prot_fasta_Feature_Extraction; loads cached .npy instead
 # ---------------------------------------------------------------------------
@@ -280,66 +312,71 @@ def main():
 
     tokenizer = None
     prott5_model = None
+    touched_seq_ids: set[str] = set()
 
-    # ── Separate valid rows from structurally invalid ones ───────────────────
-    valid_rows      = []
-    invalid_indices = []
-    index_map       = []   # valid_rows[i] came from rows[index_map[i]]
+    try:
+        # ── Separate valid rows from structurally invalid ones ───────────────
+        valid_rows = []
+        invalid_indices = []
+        index_map = []  # valid_rows[i] came from rows[index_map[i]]
 
-    for idx, row in enumerate(rows):
-        sequence = str(row.get("sequence", "")).strip()
-        seq_id = _cache_key_for_sequence(sequence, row.get("seq_id", ""))
-        smiles = str(row.get("substrates", "")).strip()
-        npy    = os.path.join(EMBED_DIR, f"{seq_id}.npy") if seq_id else ""
+        for idx, row in enumerate(rows):
+            sequence = str(row.get("sequence", "")).strip()
+            seq_id = _cache_key_for_sequence(sequence, row.get("seq_id", ""))
+            smiles = str(row.get("substrates", "")).strip()
+            npy = os.path.join(EMBED_DIR, f"{seq_id}.npy") if seq_id else ""
 
-        if not seq_id or not smiles or not sequence:
-            invalid_indices.append(idx)
-            continue
-
-        if not os.path.exists(npy):
-            try:
-                if tokenizer is None or prott5_model is None:
-                    tokenizer, prott5_model = load_prott5()
-                npy = ensure_cached_embedding(sequence, seq_id, EMBED_DIR, tokenizer, prott5_model)
-            except Exception:
+            if not seq_id or not smiles or not sequence:
                 invalid_indices.append(idx)
                 continue
 
-        if not npy or not os.path.exists(npy):
-            invalid_indices.append(idx)
-            continue
+            touched_seq_ids.add(seq_id)
 
-        valid_rows.append({"seq_id": seq_id, "substrates": smiles})
-        index_map.append(idx)
+            if not os.path.exists(npy):
+                try:
+                    if tokenizer is None or prott5_model is None:
+                        tokenizer, prott5_model = load_prott5()
+                    npy = ensure_cached_embedding(
+                        sequence, seq_id, EMBED_DIR, tokenizer, prott5_model
+                    )
+                except Exception:
+                    invalid_indices.append(idx)
+                    continue
 
-    # ── Load model and run inference ─────────────────────────────────────────
-    predictions = [None] * n
+            if not npy or not os.path.exists(npy):
+                invalid_indices.append(idx)
+                continue
 
-    if valid_rows:
-        model   = load_model(cfg)
-        dataset = CachedDTIDataset(valid_rows, embed_dir=EMBED_DIR)
-        log10_preds = run_inference(model, dataset, batch_size=cfg.SOLVER.BATCH_SIZE)
+            valid_rows.append({"seq_id": seq_id, "substrates": smiles})
+            index_map.append(idx)
 
-        for i, log_val in enumerate(log10_preds):
-            orig_idx = index_map[i]
-            try:
-                
-                predictions[orig_idx] = float(log_val)
-            except Exception:
-                predictions[orig_idx] = None
-                if orig_idx not in invalid_indices:
-                    invalid_indices.append(orig_idx)
+        # ── Load model and run inference ─────────────────────────────────────
+        predictions = [None] * n
 
-        
+        if valid_rows:
+            model = load_model(cfg)
+            dataset = CachedDTIDataset(valid_rows, embed_dir=EMBED_DIR)
+            log10_preds = run_inference(model, dataset, batch_size=cfg.SOLVER.BATCH_SIZE)
 
-    with open(args.output, "w") as f:
-        json.dump(
-            {
-                "predictions":     predictions,
-                "invalid_indices": sorted(invalid_indices),
-            },
-            f,
-        )
+            for i, log_val in enumerate(log10_preds):
+                orig_idx = index_map[i]
+                try:
+                    predictions[orig_idx] = float(log_val)
+                except Exception:
+                    predictions[orig_idx] = None
+                    if orig_idx not in invalid_indices:
+                        invalid_indices.append(orig_idx)
+
+        with open(args.output, "w") as f:
+            json.dump(
+                {
+                    "predictions": predictions,
+                    "invalid_indices": sorted(invalid_indices),
+                },
+                f,
+            )
+    finally:
+        cleanup_cached_embeddings(EMBED_DIR, touched_seq_ids)
 
 
 if __name__ == "__main__":

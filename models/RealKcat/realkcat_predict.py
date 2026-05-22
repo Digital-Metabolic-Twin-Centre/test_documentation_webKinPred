@@ -95,6 +95,27 @@ def resolve_data_dir() -> str:
     )
 
 
+def resolve_embed_cache_dir(cli_cache_dir: str | None) -> str:
+    """
+    Resolve cache dir for persistent RealKcat mean embeddings.
+
+    Priority:
+    1) --cache-dir argument
+    2) REALKCAT_EMBED_CACHE_DIR env var (injected by webKinPred descriptor)
+    3) MEDIA_ROOT/sequence_info/esm2_layer_last_mean
+    """
+    cli_cache_dir = str(cli_cache_dir or "").strip()
+    if cli_cache_dir:
+        return cli_cache_dir
+
+    env_cache = str(os.getenv("REALKCAT_EMBED_CACHE_DIR", "")).strip()
+    if env_cache:
+        return env_cache
+
+    media_root = str(os.getenv("MEDIA_ROOT", "media")).strip() or "media"
+    return str(Path(media_root) / "sequence_info" / "esm2_layer_last_mean")
+
+
 def build_hardcoded_stats(device: torch.device) -> dict:
     """Build the stats payload expected by the prediction pipeline."""
     return {
@@ -157,22 +178,22 @@ def get_esm2_embedding_cached(seq: str, seq_id: str, device: torch.device,
                                models: dict, cache_dir: str = None) -> torch.Tensor:
     """
     Get ESM2 embedding, using webKinPred cache if available.
-    
-    Cache path: media/sequence_info/omniesi_esm2/{seq_id}.pt
+
+    Cache path: media/sequence_info/esm2_layer_last_mean/{seq_id}.npy
     """
+    cache_path = None
     if cache_dir:
-        cache_path = Path(cache_dir) / "omniesi_esm2" / f"{seq_id}.pt"
+        cache_path = Path(cache_dir) / f"{seq_id}.npy"
         if cache_path.exists():
             try:
-                embedding = torch.load(cache_path, map_location=device)
-                # Mean-pool if full matrix
-                if embedding.dim() == 2:  # [seq_len, 1280]
-                    return embedding.mean(dim=0)
-                return embedding  # Already pooled [1280]
+                embedding_np = np.load(cache_path)
+                if embedding_np.ndim != 1:
+                    raise ValueError(f"Expected 1D mean vector, got shape={embedding_np.shape}")
+                return torch.from_numpy(embedding_np.astype(np.float32, copy=False)).to(device)
             except Exception as e:
                 logger.warning(f"Cache read failed for {seq_id}: {e}")
     
-    # Compute embedding
+    # Compute mean embedding locally when cache is missing.
     batch_labels, batch_strs, batch_tokens = models["batch_converter"]([("seq", seq)])
     batch_tokens = batch_tokens.to(device)
     batch_lens = (batch_tokens != models["alphabet"].padding_idx).sum(1)
@@ -182,10 +203,10 @@ def get_esm2_embedding_cached(seq: str, seq_id: str, device: torch.device,
         token_repr = results["representations"][_ESM2_LAYER][0, 1:batch_lens[0]-1]
         embedding = token_repr.mean(dim=0).type(torch.float32)  # [1280]
     
-    # Save to cache if path provided
+    # Persist mean vector cache for future runs.
     if cache_dir and cache_path:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(embedding.cpu(), cache_path)
+        np.save(cache_path, embedding.cpu().numpy().astype(np.float32, copy=False))
     
     return embedding
 
@@ -253,7 +274,6 @@ def predict_batch(rows: list[dict], target: str, models: dict,
         raise ValueError(f"Unsupported target '{target}'. Expected 'kcat' or 'Km'.")
     
     model = models["kcat_model"] if target_norm == "kcat" else models["km_model"]
-    class_ranges = models["stats"][f"class_ranges_{target_norm}"]
     
     for idx, row in enumerate(rows):
         seq, smiles = row["sequence"], row["substrates"]
@@ -322,8 +342,11 @@ def main():
     # Predict
     logger.info(f"Running {target} predictions on {len(rows)} samples...")
     predictions, invalid_indices = predict_batch(
-        rows, target, models, device, 
-        cache_dir=args.cache_dir or os.path.join(os.getenv("MEDIA_ROOT", "media"), "sequence_info")
+        rows,
+        target,
+        models,
+        device,
+        cache_dir=resolve_embed_cache_dir(args.cache_dir),
     )
     
     # Write output

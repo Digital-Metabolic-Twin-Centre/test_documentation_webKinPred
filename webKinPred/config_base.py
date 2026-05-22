@@ -28,6 +28,7 @@ _DATA_PATH_REL = {
     "IECata": "models/IECata",
     "RealKcat": "models/RealKcat",
     "RealKcat_DATA": "models/RealKcat/model_weights",
+    "realkcat_esm2_last_mean": "media/sequence_info/esm2_layer_last_mean",
     "iecata_prot_t5_residues": "media/sequence_info/iecata_prot_t5_residues",
     "media": "media",
     "tools": "tools",
