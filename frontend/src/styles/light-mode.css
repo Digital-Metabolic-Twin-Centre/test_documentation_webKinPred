@@ -425,6 +425,17 @@
   color: rgba(44, 32, 100, 0.6) !important;
 }
 
+/* Similarity histogram — download button */
+[data-theme="light"] .sim-download-btn {
+  border-color: rgba(110, 90, 200, 0.3);
+  color: rgba(44, 32, 100, 0.5);
+}
+[data-theme="light"] .sim-download-btn:hover:not(:disabled) {
+  background: rgba(110, 90, 200, 0.08);
+  border-color: rgba(110, 90, 200, 0.6);
+  color: #1c1443;
+}
+
 /* Similarity histogram — controls wrapper */
 [data-theme="light"] .sim-controls-wrapper {
   background-color: rgba(110, 90, 200, 0.06);

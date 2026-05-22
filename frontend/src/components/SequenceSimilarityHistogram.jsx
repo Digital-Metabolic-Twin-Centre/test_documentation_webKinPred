@@ -74,6 +74,12 @@ function SequenceSimilarityHistogram({ similarityData }) {
     return { labels: newLabels, dataValues: newDataValues, countValues: newCountValues };
   }, [activeModel, similarityData, similarityType, numberOfBins]);
 
+  // Derived early (before the null guard) so they're in scope for the useCallback deps
+  const modelData = (similarityData && similarityData[activeModel]) || {};
+  const averageSimilarity = similarityType === 'mean'
+    ? modelData.average_mean_similarity
+    : modelData.average_max_similarity;
+
   const handleDownload = useCallback(async () => {
     if (isDownloading) return;
     const chartInstance = chartRef.current;
@@ -81,53 +87,130 @@ function SequenceSimilarityHistogram({ similarityData }) {
 
     setIsDownloading(true);
     try {
-      // Give the browser one frame to repaint the loading indicator
+      // Let the spinner render before we block the thread
       await new Promise(resolve => requestAnimationFrame(resolve));
 
-      const sourceCanvas = chartInstance.canvas;
+      const src = chartInstance.canvas;
       const dpr = window.devicePixelRatio || 1;
-      const titleHeight = Math.round(52 * dpr);
-      const padH = Math.round(24 * dpr);
-      const padV = Math.round(16 * dpr);
+
+      // Layout (all values are actual pixels = CSS px × dpr)
+      const hPad     = Math.round(36 * dpr);
+      const titleH   = Math.round(80 * dpr);   // room for 2-line title
+      const footerH  = Math.round(52 * dpr);   // stat + branding row
 
       const dest = document.createElement('canvas');
-      dest.width = sourceCanvas.width + padH * 2;
-      dest.height = sourceCanvas.height + titleHeight + padV;
+      dest.width  = src.width + hPad * 2;
+      dest.height = src.height + titleH + footerH;
 
       const ctx = dest.getContext('2d');
 
-      // Background
-      ctx.fillStyle = isDark ? '#1a1633' : '#f8f9fa';
+      // ── Background ──────────────────────────────────────────────
+      ctx.fillStyle = isDark ? '#1a1633' : '#f5f2ff';
       ctx.fillRect(0, 0, dest.width, dest.height);
 
-      // Title
-      const typeLabel = similarityType === 'max' ? 'Max' : 'Mean';
-      const title = `Input sequences vs. ${activeModel} training data (${typeLabel} similarity)`;
-      ctx.font = `600 ${Math.round(14 * dpr)}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-      ctx.fillStyle = isDark ? 'rgba(255,255,255,0.85)' : '#2d2060';
-      ctx.textAlign = 'center';
+      // Subtle top-to-bottom gradient tint
+      const grad = ctx.createLinearGradient(0, 0, 0, dest.height);
+      grad.addColorStop(0, isDark ? 'rgba(110,90,200,0.10)' : 'rgba(110,90,200,0.07)');
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, dest.width, dest.height);
+
+      // ── Title block ─────────────────────────────────────────────
+      const typeLabel   = similarityType === 'max' ? 'Max' : 'Mean';
+      const titleColor  = isDark ? 'rgba(255,255,255,0.92)' : '#1c1443';
+      const mutedColor  = isDark ? 'rgba(255,255,255,0.45)' : 'rgba(44,32,100,0.50)';
+
+      ctx.textAlign    = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(title, dest.width / 2, titleHeight / 2);
 
-      // Chart
-      ctx.drawImage(sourceCanvas, padH, titleHeight);
+      ctx.font      = `600 ${Math.round(15 * dpr)}px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif`;
+      ctx.fillStyle = titleColor;
+      ctx.fillText(
+        `Input sequences vs. ${activeModel} training data`,
+        dest.width / 2,
+        titleH * 0.36,
+      );
 
-      const url = dest.toDataURL('image/png');
+      ctx.font      = `400 ${Math.round(11.5 * dpr)}px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif`;
+      ctx.fillStyle = mutedColor;
+      ctx.fillText(
+        `${typeLabel} Sequence Identity Distribution`,
+        dest.width / 2,
+        titleH * 0.70,
+      );
+
+      // ── Chart ────────────────────────────────────────────────────
+      ctx.drawImage(src, hPad, titleH);
+
+      // ── Bar value labels (only when bins are few enough to be legible) ──
+      if (dataValues.length <= 25) {
+        const meta        = chartInstance.getDatasetMeta(0);
+        const labelSize   = Math.round(9.5 * dpr);
+        const labelGap    = Math.round(5 * dpr);
+        const barColor    = isDark ? 'rgba(100,210,210,1)' : 'rgba(14,90,90,1)';
+
+        ctx.font          = `600 ${labelSize}px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif`;
+        ctx.textAlign     = 'center';
+        ctx.textBaseline  = 'bottom';
+        ctx.shadowBlur    = Math.round(4 * dpr);
+        ctx.shadowColor   = isDark ? 'rgba(0,0,0,0.85)' : 'rgba(255,255,255,0.95)';
+        ctx.fillStyle     = barColor;
+
+        meta.data.forEach((bar, i) => {
+          const value = dataValues[i];
+          if (!value || value < 0.5) return;
+          ctx.fillText(
+            `${value.toFixed(1)}%`,
+            hPad + bar.x,
+            titleH + bar.y - labelGap,
+          );
+        });
+
+        ctx.shadowBlur  = 0;
+        ctx.shadowColor = 'transparent';
+      }
+
+      // ── Footer: thin separator, avg stat (left), branding (right) ──
+      const sepY = src.height + titleH + Math.round(10 * dpr);
+      ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.10)' : 'rgba(110,90,200,0.18)';
+      ctx.lineWidth   = Math.round(1 * dpr);
+      ctx.beginPath();
+      ctx.moveTo(hPad, sepY);
+      ctx.lineTo(dest.width - hPad, sepY);
+      ctx.stroke();
+
+      const midFooterY = src.height + titleH + footerH * 0.58;
+
+      if (averageSimilarity !== null && averageSimilarity !== undefined) {
+        ctx.textAlign    = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.font         = `500 ${Math.round(10.5 * dpr)}px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif`;
+        ctx.fillStyle    = isDark ? 'rgba(255,255,255,0.52)' : 'rgba(44,32,100,0.52)';
+        ctx.fillText(
+          `Average ${typeLabel.toLowerCase()} similarity: ${Number(averageSimilarity).toFixed(1)}%`,
+          hPad,
+          midFooterY,
+        );
+      }
+
+      ctx.textAlign    = 'right';
+      ctx.textBaseline = 'middle';
+      ctx.font         = `400 ${Math.round(10 * dpr)}px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif`;
+      ctx.fillStyle    = isDark ? 'rgba(255,255,255,0.22)' : 'rgba(44,32,100,0.28)';
+      ctx.fillText('webKinPred', dest.width - hPad, midFooterY);
+
+      // ── Trigger download ─────────────────────────────────────────
+      const url  = dest.toDataURL('image/png');
       const link = document.createElement('a');
-      link.href = url;
+      link.href  = url;
       link.download = `similarity_${activeModel.replace(/[\s/\\:*?"<>|]+/g, '-')}_${similarityType}.png`;
       link.click();
     } finally {
       setIsDownloading(false);
     }
-  }, [isDownloading, activeModel, similarityType, isDark]);
+  }, [isDownloading, activeModel, similarityType, isDark, dataValues, averageSimilarity]);
 
   if (!similarityData) return null;
-
-  const modelData = similarityData[activeModel] || {};
-  const averageSimilarity = similarityType === 'mean'
-    ? modelData.average_mean_similarity
-    : modelData.average_max_similarity;
 
   const data = {
     labels,
