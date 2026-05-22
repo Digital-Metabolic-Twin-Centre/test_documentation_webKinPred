@@ -109,9 +109,11 @@ def validate_enzyme(seq, alphabet=aa):
     return not leftover
 
 
-def load_esm1b_model():
-    """Load ESM1b model once and return model and batch_converter"""
-    print("Loading ESM1b model...")
+def load_esm1b_model(device: torch.device | None = None):
+    """Load ESM1b model once and return model and batch_converter."""
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Loading ESM1b model on {device}...")
     model_location = join(data_dir, "saved_models", "ESM1b", "esm1b_t33_650M_UR50S.pt")
     model_data = _torch_load_compat(model_location, map_location="cpu")
     regression_location = model_location[:-3] + "-contact-regression.pt"
@@ -138,6 +140,7 @@ def load_esm1b_model():
         if key in model_dict_V2:
             del model_dict_V2[key]
     model.load_state_dict(model_dict_V2)
+    model = model.to(device)
     print("ESM1b model loaded successfully!")
 
     return model, batch_converter
@@ -178,13 +181,16 @@ def calcualte_esm1b_ts_vectors(enzyme_list, esm_model=None, batch_converter=None
             seq_id_to_seq[seq_id] = seq
 
     if seq_id_to_seq:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # Load model if not provided (backward compatibility)
         if esm_model is None or batch_converter is None:
             print(f"Embedding {len(seq_id_to_seq)} new sequences...")
-            esm_model, batch_converter = load_esm1b_model()
+            esm_model, batch_converter = load_esm1b_model(device=device)
         else:
+            esm_model = esm_model.to(device)
+            esm_model.eval()
             print(
-                f"Embedding {len(seq_id_to_seq)} new sequences using pre-loaded model..."
+                f"Embedding {len(seq_id_to_seq)} new sequences using pre-loaded model on {device}..."
             )
         batch_size_raw = str(os.environ.get("TURNUP_EMBED_BATCH_SIZE", "8")).strip()
         try:
@@ -211,6 +217,7 @@ def calcualte_esm1b_ts_vectors(enzyme_list, esm_model=None, batch_converter=None
                 batch_ids = valid_ids[start : start + batch_size]
                 data = [(sid, seq_id_to_seq[sid]) for sid in batch_ids]
                 _, _, tokens = batch_converter(data)
+                tokens = tokens.to(device)
                 with torch.no_grad():
                     results = esm_model(tokens, repr_layers=[33], return_contacts=False)
                 batch_reps = (
