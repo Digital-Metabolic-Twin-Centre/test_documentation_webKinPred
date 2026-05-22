@@ -112,7 +112,9 @@ def create_mmseqs_database(fasta_file_path: str, session_id: str) -> Tuple[str, 
     return query_db, temp_query_dir
 
 
-def run_mmseqs_search(query_db: str, target_db: str, method_name: str, session_id: str) -> str:
+def run_mmseqs_search(
+    query_db: str, target_db: str, method_name: str, session_id: str, max_seqs: int = 1000
+) -> str:
     """
     Run MMseqs2 search against target database.
 
@@ -121,6 +123,7 @@ def run_mmseqs_search(query_db: str, target_db: str, method_name: str, session_i
         target_db: Path to target database
         method_name: Name of the method (for logging)
         session_id: Session ID for logging
+        max_seqs: Max hits per query passed to --max-seqs (default 1000)
 
     Returns:
         Path to the result file
@@ -141,7 +144,7 @@ def run_mmseqs_search(query_db: str, target_db: str, method_name: str, session_i
                 result_db,
                 tmp_dir,
                 "--max-seqs",
-                "1000",
+                str(max_seqs),
                 "-s",
                 "7.5",
                 "-e",
@@ -217,6 +220,36 @@ def parse_mmseqs_results(
     mean_identity = {k: (sum(v) / len(v)) for k, v in identity_lists.items()}
 
     return max_identity, mean_identity
+
+
+def parse_mmseqs_results_raw(result_file: str) -> Dict[str, List[Tuple[str, float]]]:
+    """
+    Parse MMseqs2 result file, keeping the target ID for each hit.
+
+    Used by the merged-DB path so hits can be filtered per database before
+    aggregating to max/mean.
+
+    Args:
+        result_file: Path to MMseqs2 result file
+
+    Returns:
+        Dict mapping query_id -> [(target_id, pident), ...]
+    """
+    hits: Dict[str, List[Tuple[str, float]]] = {}
+    if not os.path.exists(result_file):
+        return hits
+    with open(result_file) as f:
+        for line in f:
+            fields = line.strip().split("\t")
+            if len(fields) < 3:
+                continue
+            query_id, target_id = fields[0], fields[1]
+            try:
+                pident = float(fields[2])
+            except ValueError:
+                continue
+            hits.setdefault(query_id, []).append((target_id, pident))
+    return hits
 
 
 def map_results_to_original_sequences(

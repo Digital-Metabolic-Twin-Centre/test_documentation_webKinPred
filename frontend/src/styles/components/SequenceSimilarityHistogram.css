@@ -60,6 +60,31 @@
   background-color: rgba(0,0,0,0.2);
 }
 
+/* Download button */
+.sim-download-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.55);
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  flex-shrink: 0;
+}
+.sim-download-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.5);
+  color: #fff;
+}
+.sim-download-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 /* Styling for the parameter list in the accordion */
 .parameter-list code {
   color: #c7d2fe; /* A light indigo for code */

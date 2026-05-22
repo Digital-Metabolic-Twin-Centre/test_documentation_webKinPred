@@ -209,7 +209,7 @@ export default function useJobSubmission() {
     closeStream();
   };
 
-  const runValidation = async () => {
+  const runValidation = async (runSimilarity = true) => {
     if (!csvFile) return;
     const sid = makeSessionId();
     setValidationSessionId(sid);
@@ -231,14 +231,19 @@ export default function useJobSubmission() {
         length_violations,
         length_limits,
       } = validation;
-      const simPromise = fetchSequenceSimilaritySummary({
-        file: csvFile,
-        useExperimental,
-        validationSessionId: sid,
-      });
-      const sim = await simPromise;
-      if (userCancelledRef.current) return;
-      setSimilarityData(sim);
+
+      if (runSimilarity) {
+        const sim = await fetchSequenceSimilaritySummary({
+          file: csvFile,
+          useExperimental,
+          validationSessionId: sid,
+        });
+        if (userCancelledRef.current) return;
+        setSimilarityData(sim);
+      } else {
+        setSimilarityData(null);
+      }
+
       setSubmissionResult({
         invalid_substrates,
         invalid_proteins,

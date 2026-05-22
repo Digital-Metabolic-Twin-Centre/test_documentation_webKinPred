@@ -1,12 +1,11 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useCallback } from 'react';
 import { Bar } from 'react-chartjs-2';
 import { Chart as ChartJS, BarElement, CategoryScale, LinearScale, Tooltip, Legend } from 'chart.js';
 import { Accordion, Row, Col } from 'react-bootstrap';
-import { InfoCircle, Diagram3, GearFill } from 'react-bootstrap-icons';
+import { InfoCircle, Diagram3, GearFill, Download } from 'react-bootstrap-icons';
 import { useTheme } from '../context/ThemeContext';
 import '../styles/components/SequenceSimilarityHistogram.css';
 
-// Register Chart.js components
 ChartJS.register(BarElement, CategoryScale, LinearScale, Tooltip, Legend);
 
 const GRANULARITY_BINS = [1, 2, 4, 5, 10, 20, 25, 50, 100];
@@ -17,11 +16,14 @@ function SequenceSimilarityHistogram({ similarityData }) {
   const axisColor = isDark ? 'rgba(255,255,255,0.75)' : '#2d2060';
   const gridColor = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(110,90,200,0.15)';
 
+  const chartRef = useRef(null);
+  const [isDownloading, setIsDownloading] = useState(false);
+
   const models = similarityData ? Object.keys(similarityData) : [];
   const [activeModel, setActiveModel] = useState(models[0] || '');
-  const [similarityType, setSimilarityType] = useState('max'); // 'max' or 'mean'
-  
-  const DEFAULT_BIN_INDEX = 3; // Default to 5 bins
+  const [similarityType, setSimilarityType] = useState('max');
+
+  const DEFAULT_BIN_INDEX = 3;
   const [binIndex, setBinIndex] = useState(DEFAULT_BIN_INDEX);
   const numberOfBins = GRANULARITY_BINS[binIndex];
 
@@ -33,18 +35,18 @@ function SequenceSimilarityHistogram({ similarityData }) {
     const modelData = similarityData[activeModel];
     const rawPercentages = similarityType === 'mean' ? modelData.histogram_mean : modelData.histogram_max;
     const rawCounts = similarityType === 'mean' ? modelData.count_mean : modelData.count_max;
-    
+
     if (!rawPercentages || !rawCounts) {
       return { labels: [], dataValues: [], countValues: [] };
     }
-    
+
     if (numberOfBins >= 100) {
-        const sortedLabels = Object.keys(rawPercentages).sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
-        return {
-            labels: sortedLabels,
-            dataValues: sortedLabels.map(label => rawPercentages[label]),
-            countValues: sortedLabels.map(label => rawCounts[label])
-        };
+      const sortedLabels = Object.keys(rawPercentages).sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
+      return {
+        labels: sortedLabels,
+        dataValues: sortedLabels.map(label => rawPercentages[label]),
+        countValues: sortedLabels.map(label => rawCounts[label]),
+      };
     }
 
     const newLabels = [];
@@ -53,33 +55,72 @@ function SequenceSimilarityHistogram({ similarityData }) {
     const binSize = 101 / numberOfBins;
 
     for (let i = 0; i < numberOfBins; i++) {
-        const start = Math.floor(i * binSize);
-        const end = Math.floor((i + 1) * binSize) - 1;
-        
-        const actualEnd = (i === numberOfBins - 1) ? 100 : end;
+      const start = Math.floor(i * binSize);
+      const end = Math.floor((i + 1) * binSize) - 1;
+      const actualEnd = i === numberOfBins - 1 ? 100 : end;
 
-        let binPercentage = 0;
-        let binCount = 0;
-        
-        for (let j = start; j <= actualEnd; j++) {
-            const key = String(j);
-            if (rawPercentages[key] !== undefined) {
-                binPercentage += rawPercentages[key];
-            }
-            if (rawCounts[key] !== undefined) {
-                binCount += rawCounts[key];
-            }
-        }
-        
-        newLabels.push(`${start}-${actualEnd}`);
-        newDataValues.push(binPercentage);
-        newCountValues.push(binCount);
+      let binPercentage = 0;
+      let binCount = 0;
+      for (let j = start; j <= actualEnd; j++) {
+        const key = String(j);
+        if (rawPercentages[key] !== undefined) binPercentage += rawPercentages[key];
+        if (rawCounts[key] !== undefined) binCount += rawCounts[key];
+      }
+      newLabels.push(`${start}-${actualEnd}`);
+      newDataValues.push(binPercentage);
+      newCountValues.push(binCount);
     }
-    
-    return { labels: newLabels, dataValues: newDataValues, countValues: newCountValues };
 
+    return { labels: newLabels, dataValues: newDataValues, countValues: newCountValues };
   }, [activeModel, similarityData, similarityType, numberOfBins]);
 
+  const handleDownload = useCallback(async () => {
+    if (isDownloading) return;
+    const chartInstance = chartRef.current;
+    if (!chartInstance) return;
+
+    setIsDownloading(true);
+    try {
+      // Give the browser one frame to repaint the loading indicator
+      await new Promise(resolve => requestAnimationFrame(resolve));
+
+      const sourceCanvas = chartInstance.canvas;
+      const dpr = window.devicePixelRatio || 1;
+      const titleHeight = Math.round(52 * dpr);
+      const padH = Math.round(24 * dpr);
+      const padV = Math.round(16 * dpr);
+
+      const dest = document.createElement('canvas');
+      dest.width = sourceCanvas.width + padH * 2;
+      dest.height = sourceCanvas.height + titleHeight + padV;
+
+      const ctx = dest.getContext('2d');
+
+      // Background
+      ctx.fillStyle = isDark ? '#1a1633' : '#f8f9fa';
+      ctx.fillRect(0, 0, dest.width, dest.height);
+
+      // Title
+      const typeLabel = similarityType === 'max' ? 'Max' : 'Mean';
+      const title = `Input sequences vs. ${activeModel} training data (${typeLabel} similarity)`;
+      ctx.font = `600 ${Math.round(14 * dpr)}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+      ctx.fillStyle = isDark ? 'rgba(255,255,255,0.85)' : '#2d2060';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(title, dest.width / 2, titleHeight / 2);
+
+      // Chart
+      ctx.drawImage(sourceCanvas, padH, titleHeight);
+
+      const url = dest.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `similarity_${activeModel.replace(/[\s/\\:*?"<>|]+/g, '-')}_${similarityType}.png`;
+      link.click();
+    } finally {
+      setIsDownloading(false);
+    }
+  }, [isDownloading, activeModel, similarityType, isDark]);
 
   if (!similarityData) return null;
 
@@ -97,8 +138,8 @@ function SequenceSimilarityHistogram({ similarityData }) {
       borderColor: 'rgba(75,192,192,1)',
       borderWidth: 1,
       barPercentage: 1.0,
-      categoryPercentage: 0.9
-    }]
+      categoryPercentage: 0.9,
+    }],
   };
 
   const options = {
@@ -113,23 +154,23 @@ function SequenceSimilarityHistogram({ similarityData }) {
             const percentage = context.parsed.y;
             const count = countValues[context.dataIndex];
             return `${percentage.toFixed(1)}% of input (${count} sequence${count !== 1 ? 's' : ''}) found in this range`;
-          }
-        }
-      }
+          },
+        },
+      },
     },
     scales: {
       x: {
         title: { display: true, text: `${similarityType === 'mean' ? 'Mean' : 'Max'} Sequence Similarity (%)`, color: axisColor, font: { size: 14 } },
         ticks: { color: axisColor, font: { size: 12 } },
-        grid: { color: gridColor }
+        grid: { color: gridColor },
       },
       y: {
         title: { display: true, text: 'Frequency of Your Input Sequences (%)', color: axisColor, font: { size: 14 } },
         ticks: { color: axisColor, font: { size: 12 } },
         grid: { color: gridColor },
-        beginAtZero: true
-      }
-    }
+        beginAtZero: true,
+      },
+    },
   };
 
   return (
@@ -140,28 +181,33 @@ function SequenceSimilarityHistogram({ similarityData }) {
           <div className="row justify-content-between align-items-center mb-4">
             <div className="col-md-auto mb-3 mb-md-0">
               <label className="form-label d-block mb-2 small sim-section-label">Dataset</label>
-              <div className="col-md-auto mb-3 mb-md-0">
-                            <div>
-                              {models.map(model => (
-                                <button 
-                                  key={model} 
-                                  onClick={() => setActiveModel(model)} 
-                                  // This is the only line that changes
-                                  className={`btn btn-kave-toggle ${activeModel === model ? 'active' : ''} me-2`}
-                                >
-                                  {model}
-                                </button>
-                              ))}
-                            </div>
+              <div>
+                {models.map(model => (
+                  <button
+                    key={model}
+                    onClick={() => setActiveModel(model)}
+                    className={`btn btn-kave-toggle ${activeModel === model ? 'active' : ''} me-2`}
+                  >
+                    {model}
+                  </button>
+                ))}
               </div>
             </div>
             <div className="col-md-auto">
               <label className="form-label d-block mb-2 small sim-section-label">View Type</label>
               <div className="btn-group" role="group">
-                <button type="button" className={`btn sim-view-btn ${similarityType === 'max' ? 'active' : ''}`} onClick={() => setSimilarityType('max')}>
+                <button
+                  type="button"
+                  className={`btn sim-view-btn ${similarityType === 'max' ? 'active' : ''}`}
+                  onClick={() => setSimilarityType('max')}
+                >
                   Max
                 </button>
-                <button type="button" className={`btn sim-view-btn ${similarityType === 'mean' ? 'active' : ''}`} onClick={() => setSimilarityType('mean')}>
+                <button
+                  type="button"
+                  className={`btn sim-view-btn ${similarityType === 'mean' ? 'active' : ''}`}
+                  onClick={() => setSimilarityType('mean')}
+                >
                   Mean
                 </button>
               </div>
@@ -170,7 +216,9 @@ function SequenceSimilarityHistogram({ similarityData }) {
 
           <div className="row justify-content-center">
             <div className="col-lg-7 d-flex align-items-center sim-slider-row">
-              <label htmlFor="granularity-slider" className="form-label me-3 mb-0 small sim-section-label">Granularity</label>
+              <label htmlFor="granularity-slider" className="form-label me-3 mb-0 small sim-section-label">
+                Granularity
+              </label>
               <input
                 type="range"
                 className="form-range"
@@ -180,18 +228,35 @@ function SequenceSimilarityHistogram({ similarityData }) {
                 value={binIndex}
                 onChange={(e) => setBinIndex(parseInt(e.target.value, 10))}
               />
-              <span className="fw-bold ms-3" style={{ minWidth: '70px', textAlign: 'right' }}>{numberOfBins} Bins</span>
+              <span className="fw-bold ms-3" style={{ minWidth: '70px', textAlign: 'right' }}>
+                {numberOfBins} Bins
+              </span>
             </div>
           </div>
         </div>
       </div>
-      
+
       {averageSimilarity !== null && (
-        <div className="text-center my-4">
-          <p className="sim-body-text mb-0">Input sequences vs. <strong>{activeModel}</strong> training data ({similarityType} similarity)</p>
+        <div className="d-flex align-items-center justify-content-center gap-2 my-4">
+          <p className="sim-body-text mb-0">
+            Input sequences vs. <strong>{activeModel}</strong> training data ({similarityType} similarity)
+          </p>
+          <button
+            className="btn sim-download-btn"
+            onClick={handleDownload}
+            disabled={isDownloading}
+            title="Download chart as PNG"
+            aria-label="Download chart as PNG"
+          >
+            {isDownloading
+              ? <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true" />
+              : <Download size={15} />
+            }
+          </button>
         </div>
       )}
-      <Bar data={data} options={options} />
+
+      <Bar ref={chartRef} data={data} options={options} />
 
       <h5 className="tab-section-header text-center mt-5 mb-4">Sequence Similarity Histogram</h5>
 
@@ -214,7 +279,7 @@ function SequenceSimilarityHistogram({ similarityData }) {
             <Row className="mt-2">
               <Col md={6}>
                 <strong>Max Similarity</strong>
-                <p className="sim-section-label small">The single highest percentage identity found for each of your sequences. This represents the "best match" in the training data.</p>
+                <p className="sim-section-label small">The single highest percentage identity found for each of your sequences. This represents the &quot;best match&quot; in the training data.</p>
               </Col>
               <Col md={6}>
                 <strong>Mean Similarity</strong>
@@ -226,7 +291,7 @@ function SequenceSimilarityHistogram({ similarityData }) {
 
         <Accordion.Item eventKey="2">
           <Accordion.Header>
-            <GearFill className="me-2" /> Technical Details & Parameters
+            <GearFill className="me-2" /> Technical Details &amp; Parameters
           </Accordion.Header>
           <Accordion.Body>
             <p>If no significant hits are found for a sequence, both its mean and max similarity are set to 0%. All similarity values are rounded to the nearest integer for binning.</p>

@@ -74,9 +74,9 @@ export default function JobSubmissionForm() {
           <PreprocessModal
             show={state.showPreprocessPrompt}
             onHide={() => state.setShowPreprocessPrompt(false)}
-            onRunValidation={async () => {
+            onRunValidation={async (runSimilarity) => {
               state.setShowPreprocessPrompt(false);
-              await state.runValidation();
+              await state.runValidation(runSimilarity);
             }}
             isValidating={state.isValidating}
           />

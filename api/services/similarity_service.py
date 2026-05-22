@@ -2,6 +2,7 @@
 Similarity analysis service that orchestrates the similarity workflow.
 """
 
+import json
 import logging
 import os
 import subprocess
@@ -23,11 +24,34 @@ from api.utils.similarity_utils import (
     extract_protein_sequences_from_csv,
     map_results_to_original_sequences,
     parse_mmseqs_results,
+    parse_mmseqs_results_raw,
     run_mmseqs_search,
     _mmseqs_cmd,
 )
 
 _log = logging.getLogger(__name__)
+
+
+def _find_merged_db() -> tuple[str, str] | tuple[None, None]:
+    """Return (merged_db_path, membership_json_path) if both exist, else (None, None)."""
+    datasets = SIMILARITY_DATASETS or {}
+    any_dataset = next(iter(datasets.values()), {})
+    any_target_db = any_dataset.get("target_db", "")
+    if not any_target_db:
+        return None, None
+    dbs_dir = os.path.dirname(any_target_db)
+    merged_db = os.path.join(dbs_dir, "targetdb_merged")
+    membership_path = f"{merged_db}_membership.json"
+    if (os.path.exists(merged_db) or os.path.exists(f"{merged_db}.dbtype")) and os.path.exists(
+        membership_path
+    ):
+        return merged_db, membership_path
+    return None, None
+
+
+def _load_membership(membership_path: str) -> Dict[str, List[str]]:
+    with open(membership_path) as f:
+        return json.load(f)
 
 
 def analyze_sequence_similarity(csv_file, session_id: str = "default") -> Dict[str, Any]:
@@ -45,28 +69,23 @@ def analyze_sequence_similarity(csv_file, session_id: str = "default") -> Dict[s
         ValueError: If CSV is invalid or contains no sequences
         Exception: If analysis fails
     """
-    # Extract sequences from CSV
     input_sequences = extract_protein_sequences_from_csv(csv_file)
-
-    # Create unique sequence mapping to avoid redundant analysis
     unique_sequences, seq_to_unique_id = create_unique_sequence_mapping(input_sequences)
-
-    # Create temporary FASTA file
     query_file_path = create_fasta_file(unique_sequences, seq_to_unique_id)
     temp_files_to_cleanup = [query_file_path]
 
     try:
-        # Create MMseqs2 database
         query_db, temp_query_dir = create_mmseqs_database(query_file_path, session_id)
         temp_files_to_cleanup.append(temp_query_dir)
 
-        # Process each target database
         method_histograms = {}
 
         datasets = SIMILARITY_DATASETS or {
             label: {"label": label, "target_db": path} for label, path in TARGET_DBS.items()
         }
 
+        # Filter to datasets whose DBs are present on disk
+        active_datasets: Dict[str, Any] = {}
         for _dataset_key, dataset in datasets.items():
             label = dataset.get("label") or _dataset_key
             target_db = dataset.get("target_db")
@@ -76,21 +95,93 @@ def analyze_sequence_similarity(csv_file, session_id: str = "default") -> Dict[s
             if not (os.path.exists(target_db) or os.path.exists(f"{target_db}.dbtype")):
                 push_line(session_id, f"[WARN] Skipping dataset '{label}' (DB files not found)")
                 continue
+            active_datasets[label] = dataset
 
-            push_line(session_id, f"==> Processing DB: {label}")
+        merged_db, membership_path = _find_merged_db()
 
-            # Run similarity analysis for this dataset
-            method_result = analyze_similarity_for_method(
-                query_db,
-                target_db,
-                query_file_path,
-                label,
-                input_sequences,
-                seq_to_unique_id,
-                session_id,
-            )
+        if merged_db and active_datasets:
+            membership = _load_membership(membership_path)
 
-            method_histograms[label] = method_result
+            # Build reverse index: label -> set of mseq IDs
+            label_to_targets: Dict[str, set] = {}
+            for mseq_id, labels in membership.items():
+                for lbl in labels:
+                    label_to_targets.setdefault(lbl, set()).add(mseq_id)
+
+            covered = [lbl for lbl in active_datasets if lbl in label_to_targets]
+            uncovered = [lbl for lbl in active_datasets if lbl not in label_to_targets]
+
+            if uncovered:
+                push_line(
+                    session_id,
+                    f"[WARN] Not in merged DB, searching individually: {', '.join(uncovered)}",
+                )
+
+            if covered:
+                # Single search against the merged DB; no --max-seqs truncation so
+                # every hit that would be found in any individual search is present.
+                push_line(session_id, "==> Running single merged search")
+                result_file = run_mmseqs_search(
+                    query_db, merged_db, "merged", session_id, max_seqs=len(membership)
+                )
+                temp_files_to_cleanup.append(os.path.dirname(result_file))
+
+                raw_hits = parse_mmseqs_results_raw(result_file)
+
+                for label in covered:
+                    push_line(session_id, f"==> Processing DB: {label}")
+                    target_ids = label_to_targets[label]
+
+                    # Filter hits to this DB's sequences; 0.0 for queries with no hits
+                    identity_lists: Dict[str, List[float]] = {}
+                    for query_id, hits in raw_hits.items():
+                        filtered = [p for t, p in hits if t in target_ids]
+                        if filtered:
+                            identity_lists[query_id] = filtered
+                    for unique_id in seq_to_unique_id.values():
+                        if unique_id not in identity_lists:
+                            identity_lists[unique_id] = [0.0]
+
+                    unique_max = {k: max(v) for k, v in identity_lists.items()}
+                    unique_mean = {k: sum(v) / len(v) for k, v in identity_lists.items()}
+
+                    query_to_max, query_to_mean = map_results_to_original_sequences(
+                        unique_max, unique_mean, input_sequences, seq_to_unique_id
+                    )
+                    histogram_max_counts, histogram_max_perc = calculate_identity_histogram(
+                        query_to_max
+                    )
+                    histogram_mean_counts, histogram_mean_perc = calculate_identity_histogram(
+                        query_to_mean
+                    )
+                    method_histograms[label] = {
+                        "histogram_max": histogram_max_perc,
+                        "histogram_mean": histogram_mean_perc,
+                        "average_max_similarity": calculate_average_similarity(query_to_max),
+                        "average_mean_similarity": calculate_average_similarity(query_to_mean),
+                        "count_max": histogram_max_counts,
+                        "count_mean": histogram_mean_counts,
+                    }
+                    push_line(session_id, f"--> [{label}] Aggregated {len(query_to_max)} sequences")
+
+            # Individual fallback for any dataset not covered by the merged DB
+            for label in uncovered:
+                target_db = active_datasets[label].get("target_db")
+                push_line(session_id, f"==> Processing DB: {label}")
+                method_histograms[label] = analyze_similarity_for_method(
+                    query_db, target_db, query_file_path, label,
+                    input_sequences, seq_to_unique_id, session_id,
+                )
+
+        else:
+            # No merged DB available — original per-DB loop
+            for label, dataset in active_datasets.items():
+                target_db = dataset.get("target_db")
+                push_line(session_id, f"==> Processing DB: {label}")
+                method_histograms[label] = analyze_similarity_for_method(
+                    query_db, target_db, query_file_path, label,
+                    input_sequences, seq_to_unique_id, session_id,
+                )
 
         if not method_histograms:
             raise ValueError(
@@ -101,7 +192,6 @@ def analyze_sequence_similarity(csv_file, session_id: str = "default") -> Dict[s
         return method_histograms
 
     finally:
-        # Clean up all temporary files
         cleanup_temporary_files(*temp_files_to_cleanup)
 
 
