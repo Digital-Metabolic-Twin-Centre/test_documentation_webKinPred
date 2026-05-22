@@ -8,7 +8,7 @@ const teamInstitutions = [
   {
     institution: 'Digital Metabolic Twin Center, University of Galway',
     location: 'Galway, Ireland',
-    members: ['Ronan Fleming', 'Saleh Alwer'],
+    members: ['Ronan Fleming', 'Saleh Alwer', 'Farid Zare', 'Jack McGoldrick'],
   },
   {
     institution: 'Faculty of Science, Technology and Medicine, University of Luxembourg',
@@ -178,13 +178,6 @@ const About = () => {
 
         <section className="about-contact-section">
           <h4 className="about-citation-heading">Contact</h4>
-          <p className="about-contact-text" style={{ marginBottom: '0.5rem' }}>
-            <strong>Digital Metabolic Twin Center, University of Galway</strong><br />
-            📍 Galway, Ireland
-          </p>
-          <p className="about-contact-text" style={{ marginBottom: '0.5rem' }}>
-            <strong>Team:</strong> Ronan Fleming, Saleh Alwer, Farid Zare, Jack McGoldrick
-          </p>
           <p className="about-contact-text">
             Email{' '}
             <a href="mailto:s.alwer1@universityofgalway.ie" className="about-contact-link">
