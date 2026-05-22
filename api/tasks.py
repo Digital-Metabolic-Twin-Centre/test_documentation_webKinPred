@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from typing import Any
 
 import pandas as pd
 from celery import shared_task
@@ -59,6 +60,27 @@ except ImportError:
 
 _log = logging.getLogger(__name__)
 
+_REALKCAT_CLASS_RANGES: dict[str, dict[int, tuple[float, float]]] = {
+    "kcat": {
+        0: (0.0, 3.32e-8),
+        1: (3.33e-8, 1.0e-2),
+        2: (1.01e-2, 1.0e-1),
+        3: (1.01e-1, 1.0),
+        4: (1.001, 10.0),
+        5: (1.004e1, 1.0e2),
+        6: (1.0025e2, 1.0e3),
+        7: (1.002e3, 7.0e7),
+    },
+    "Km": {
+        0: (1.0e-10, 1.0e-5),
+        1: (1.01e-5, 1.0e-4),
+        2: (1.002e-4, 1.0e-3),
+        3: (1.002e-3, 1.0e-2),
+        4: (1.008e-2, 1.0e-1),
+        5: (1.01e-1, 1.02e2),
+    },
+}
+
 
 # ---------------------------------------------------------------------------
 # Celery tasks
@@ -79,6 +101,44 @@ def _safe_refresh_about_stats_cache() -> None:
     except Exception:
         # About stats are non-critical and should never break jobs.
         pass
+
+
+def _format_prediction_value_and_source(desc, target: str, prediction: Any) -> tuple[Any, str]:
+    """
+    Return the output value and source string for one predicted row.
+
+    For RealKcat only, convert class-index outputs to class-range mean values
+    and include classifier context in the source text.
+    """
+    default_source = f"Prediction from {desc.display_name}"
+
+    if desc.key != "RealKcat":
+        return prediction, default_source
+
+    if prediction is None:
+        return None, default_source
+
+    ranges = _REALKCAT_CLASS_RANGES.get(target)
+    if not ranges:
+        return prediction, default_source
+
+    try:
+        class_idx = int(prediction)
+    except (TypeError, ValueError):
+        return prediction, default_source
+
+    class_range = ranges.get(class_idx)
+    if class_range is None:
+        return prediction, default_source
+
+    low, high = class_range
+    mean_value = (low + high) / 2.0
+    source = (
+        "Prediction from RealKcat (classifier): "
+        f"class {class_idx}, range {low:.3e} to {high:.3e}; "
+        "value is class-range mean."
+    )
+    return mean_value, source
 
 
 @shared_task
@@ -389,8 +449,9 @@ def _execute_prediction(
             **call_kwargs,
         )
         for global_i, pred in zip(valid_idx, pred_subset):
-            full_preds[global_i] = pred if pred is not None else ""
-            sources[global_i] = f"Prediction from {desc.display_name}"
+            value_out, source_out = _format_prediction_value_and_source(desc, target, pred)
+            full_preds[global_i] = value_out if value_out is not None else ""
+            sources[global_i] = source_out
         skipped_reasons.update(_map_subset_invalid_reasons(valid_idx, invalid_reasons))
 
     for idx, reason in skipped_reasons.items():
@@ -502,9 +563,10 @@ def _execute_both_prediction(
             **kcat_call_kwargs,
         )
         for global_i, pred in zip(valid_idx, kcat_subset):
-            kcat_preds[global_i] = pred if pred is not None else ""
-            if pred is not None:
-                kcat_src[global_i] = f"Prediction from {kcat_desc.display_name}"
+            value_out, source_out = _format_prediction_value_and_source(kcat_desc, "kcat", pred)
+            kcat_preds[global_i] = value_out if value_out is not None else ""
+            if value_out is not None:
+                kcat_src[global_i] = source_out
         skipped_reasons.update(_map_subset_invalid_reasons(valid_idx, kcat_bad))
 
     # ── 4. KM predictions ─────────────────────────────────────────────────────
@@ -526,9 +588,10 @@ def _execute_both_prediction(
             **km_call_kwargs,
         )
         for global_i, pred in zip(valid_idx, km_subset):
-            km_preds[global_i] = pred if pred is not None else ""
-            if pred is not None:
-                km_src[global_i] = f"Prediction from {km_desc.display_name}"
+            value_out, source_out = _format_prediction_value_and_source(km_desc, "Km", pred)
+            km_preds[global_i] = value_out if value_out is not None else ""
+            if value_out is not None:
+                km_src[global_i] = source_out
         skipped_reasons.update(_map_subset_invalid_reasons(valid_idx, km_bad))
 
     for idx, reason in skipped_reasons.items():
@@ -694,8 +757,9 @@ def _execute_multi_prediction(
             raise
 
         for global_i, pred in zip(valid_idx, pred_subset):
-            results["preds"][global_i] = pred if pred is not None else ""
-            results["sources"][global_i] = f"Prediction from {desc.display_name}"
+            value_out, source_out = _format_prediction_value_and_source(desc, target, pred)
+            results["preds"][global_i] = value_out if value_out is not None else ""
+            results["sources"][global_i] = source_out
         skipped_reasons.update(_map_subset_invalid_reasons(valid_idx, invalid_subset))
         mark_stage_completed(job.public_id, target, desc.key)
 

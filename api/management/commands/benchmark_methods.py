@@ -7,7 +7,9 @@ For each method, this command can run up to three benchmark modes:
 3) cached repeat, for methods with a persistent cache
 
 Each method is benchmarked for exactly one target: kcat if supported, otherwise
-Km. GPU mode is submitted only for method/target pairs with GPU offload support.
+Km. With --kcat_km_ratio, only kcat/Km-capable methods are benchmarked and each
+run uses the kcat/Km target. GPU mode is submitted only for method/target pairs
+with GPU offload support.
 Methods with ephemeral embedding use (currently OmniESI and EITLEM) skip the
 cached repeat because there is no persistent sequence cache to benchmark.
 
@@ -135,7 +137,8 @@ class PendingBenchmarkJob:
 class Command(BaseCommand):
     help = (
         "Benchmark inference time for each registered method, using kcat when "
-        "available and otherwise Km, with uncached cpu, uncached gpu, and cached modes."
+        "available and otherwise Km (or only kcat/Km with --kcat_km_ratio), "
+        "with uncached cpu, uncached gpu, and cached modes."
     )
 
     def add_arguments(self, parser):
@@ -198,6 +201,14 @@ class Command(BaseCommand):
             ),
         )
         parser.add_argument(
+            "--kcat_km_ratio",
+            action="store_true",
+            help=(
+                "Benchmark only kcat/Km-capable methods, using the kcat/Km "
+                "target for all selected methods."
+            ),
+        )
+        parser.add_argument(
             "--handle-long-sequences",
             choices=["truncate", "skip"],
             default="truncate",
@@ -248,6 +259,7 @@ class Command(BaseCommand):
         testmode = options["testmode"]
         gpu_only = options["gpu_only"]
         methods_filter = options["methods"]
+        kcat_km_ratio = options["kcat_km_ratio"]
         handle_long_sequences = options["handle_long_sequences"]
         api_base_url = options["api_base_url"].rstrip("/")
         api_key = options["api_key"]
@@ -287,6 +299,7 @@ class Command(BaseCommand):
             session=session,
             api_base_url=api_base_url,
             request_timeout_seconds=request_timeout_seconds,
+            kcat_km_ratio=kcat_km_ratio,
         )
 
         if methods_filter:
@@ -1145,6 +1158,7 @@ class Command(BaseCommand):
         session: requests.Session,
         api_base_url: str,
         request_timeout_seconds: float,
+        kcat_km_ratio: bool = False,
     ) -> dict[str, str]:
         methods_url = f"{api_base_url}/methods/"
         try:
@@ -1162,13 +1176,12 @@ class Command(BaseCommand):
             data = response.json()
         except ValueError as exc:
             raise CommandError(f"/methods response was not valid JSON: {exc}")
-
         methods_by_target = data.get("methods", {})
         if not isinstance(methods_by_target, dict):
             raise CommandError("/methods response did not include a methods object.")
-
         selected: dict[str, str] = {}
-        for target in ("kcat", "Km"):
+        target_priority = ("kcat/Km",) if kcat_km_ratio else ("kcat", "Km")
+        for target in target_priority:
             entries = methods_by_target.get(target, [])
             if not isinstance(entries, list):
                 continue
@@ -1179,10 +1192,10 @@ class Command(BaseCommand):
                 if not method_id:
                     continue
                 selected.setdefault(method_id, target)
-
         if not selected:
+            mode = "kcat/Km-capable" if kcat_km_ratio else "kcat- or Km-capable"
             raise CommandError(
-                "No kcat- or Km-capable methods were returned by the API /methods endpoint."
+                f"No {mode} methods were returned by the API /methods endpoint."
             )
         return selected
 
