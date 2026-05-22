@@ -75,13 +75,6 @@ export default function HowToUseCard({ methods = {} }) {
             <Link to="/about" className="howto-limit-link">contact us</Link>.
           </div>
         </Alert>
-        <Alert variant="info" className="d-flex align-items-center">
-          <Bullseye size={24} className="me-3" />
-          <div>
-            Ticking <strong>“Prefer experimental data”</strong> will first search BRENDA, SABIO-RK, and UniProt for known values. If found, these are used instead of model predictions.
-          </div>
-        </Alert>
-
         <Row className="text-center">
           <Col md={4} className="step-col">
             <div className="step-icon"><Bullseye size={30} /></div>
