@@ -1092,6 +1092,19 @@
   border-color: rgba(110, 90, 200, 0.3) !important;
 }
 
+[data-theme="light"] .about-contact-text {
+  color: #2a1f5e;
+}
+
+[data-theme="light"] .about-contact-link {
+  color: #5b35c8;
+  text-decoration-color: rgba(91, 53, 200, 0.45);
+}
+
+[data-theme="light"] .about-contact-link:hover {
+  color: #3d1fa8;
+}
+
 /* ═══════════════════════════════════════════════════════════
    17. TRACK JOB PAGE
    ═══════════════════════════════════════════════════════════ */
