@@ -10,6 +10,8 @@ import apiClient from '../../appClient';
  *   {
  *     "DLKcat":  { id: "DLKcat", displayName, supports: ["kcat"], ... },
  *     "UniKP":   { id: "UniKP", supports: ["kcat", "Km"], ... },
+ *     "RealKcat": { id: "RealKcat", supports: ["kcat", "Km"], ... },
+ *     "IECata":   { id: "IECata", supports: ["kcat/Km"], ... },
  *     "CataPro": { id: "CataPro", supports: ["kcat", "Km", "kcat/Km"], ... },
  *     ...
  *   }

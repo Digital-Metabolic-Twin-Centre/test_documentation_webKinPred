@@ -169,7 +169,45 @@ shape `[seq_len, 1280]`, as a CPU `.pt` file. Prediction deletes these files
 after the run, matching EITLEM's ephemeral `esm1v` behaviour. This is
 intentionally separate from CatPred's checkpoint-specific pooled ESM2 cache.
 
-### 3.8 MMISA-KM
+### 3.8 RealKcat
+
+Engine and planner:
+
+- Engine: generic subprocess `api/prediction_engines/generic_subprocess.py`
+- Planner profile: `realkcat_esm2_last_mean`
+- GPU precompute call: yes, from generic engine
+
+Cache artefact:
+
+- `media/sequence_info/esm2_layer_last_mean/{seq_id}.npy`
+
+GPU step:
+
+- `realkcat_esm2_last_mean`
+
+RealKcat uses a persistent ESM2 layer-33 mean-vector cache keyed by `seq_id`.
+Files are reused across runs and are not deleted after prediction.
+
+### 3.9 IECata
+
+Engine and planner:
+
+- Engine: generic subprocess `api/prediction_engines/generic_subprocess.py`
+- Planner profile: `iecata_prot_t5_residues`
+- GPU precompute call: yes, from generic engine
+
+Staged artefact:
+
+- `media/sequence_info/iecata_prot_t5_residues/{seq_id}.npy`
+
+GPU step:
+
+- `iecata_prot_t5_residues`
+
+IECata stages full ProtT5 per-residue tensors as ephemeral files. Prediction
+consumes these files and removes touched artefacts after the run.
+
+### 3.10 MMISA-KM
 
 MMISA-KM does not use a PLM embedding cache and is not GPU-offload eligible in
 the shared embedding system.
@@ -293,6 +331,8 @@ Current active step keys:
 - `catpred_embed_kcat`
 - `catpred_embed_km`
 - `omniesi_esm2`
+- `realkcat_esm2_last_mean`
+- `iecata_prot_t5_residues`
 
 Deprecated keys kept for compatibility:
 
@@ -344,6 +384,8 @@ Existing PLM caches:
 - `esm1b_turnup/{seq_id}.npy`: TurNup protein vector derived from `esm1b_t33_650M_UR50S` plus the TurNup fine-tuned checkpoint (`model_ESM_binary_A100_epoch_1_new_split.pkl`).
 - `catpred_esm2/{kcat|km}/{model_key}/{seq_id}.pt`: CatPred checkpoint-specific pooled tensor, generated from `esm2_t33_650M_UR50D` residue features and attentive pooling.
 - `omniesi_esm2/{seq_id}.pt`: OmniESI ephemeral full per-residue `esm2_t33_650M_UR50D` layer-33 tensor.
+- `esm2_layer_last_mean/{seq_id}.npy`: RealKcat persistent ESM2 layer-33 mean vector (`esm2_t33_650M_UR50D`).
+- `iecata_prot_t5_residues/{seq_id}.npy`: IECata ephemeral full ProtT5 per-residue embedding tensor.
 
 ### 9.1 Reuse an existing embedding family
 
