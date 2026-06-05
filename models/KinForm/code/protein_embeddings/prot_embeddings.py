@@ -61,6 +61,14 @@ def _save_array_atomic(path: Path, arr: np.ndarray) -> None:
             tmp_path.unlink(missing_ok=True)
 
 
+def _cleanup_residue_files(residue_dir: Path, keys: list[str]) -> None:
+    for key in keys:
+        try:
+            (residue_dir / f"{key}.npy").unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def get_embeddings(seq_dict, batch_size=2, model=None, id_to_seq=None, setting='mean',all_layers=False, only_save=False, layer=None, weights_df: Optional[pd.DataFrame] = None, weights_key_col: str = "PDB", weights_col: str = "Pred_BS_Scores"):
     _require_cuda_if_requested(f"{model} embedding")
     # Parse setting - can be combination like "mean+weighted"
@@ -682,6 +690,10 @@ def stream_embeddings_multi_layer(
 
         if bg_writer is not None:
             bg_writer.join()
+        if legacy_residue_write:
+            keys = list(seq_dict.keys())
+            for residue_dir in layer_residue_dirs.values():
+                _cleanup_residue_files(residue_dir, keys)
         stream.send(
             {
                 "type": "WORKER_DONE",

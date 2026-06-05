@@ -803,6 +803,52 @@ def _derive_weighted_if_ready(
         return False
 
 
+def _residue_consumers_done(
+    *,
+    targets: ArtifactTargets,
+    family: str,
+    root: str,
+    seq_id: str,
+    bs_scores: dict[str, np.ndarray],
+) -> bool:
+    if seq_id in targets.mean_targets.get((family, root), set()):
+        if not _artifact_path(targets.media_path, root, "mean", seq_id).exists():
+            return False
+    if seq_id in targets.weighted_targets.get((family, root), set()):
+        if not _artifact_path(targets.media_path, root, "weighted", seq_id).exists():
+            return False
+    if family == _T5_FAMILY and root == "prot_t5_last":
+        if seq_id in targets.binding_site_targets and seq_id not in bs_scores:
+            return False
+    return True
+
+
+def _cleanup_satisfied_residue_files(
+    *,
+    targets: ArtifactTargets,
+    bs_scores: dict[str, np.ndarray],
+) -> int:
+    removed = 0
+    for family, roots in _FAMILY_ROOTS.items():
+        for root in roots:
+            for seq_id in targets.seq_ids:
+                residue_path = _artifact_path(targets.media_path, root, "residue", seq_id)
+                if not residue_path.exists():
+                    continue
+                if not _residue_consumers_done(
+                    targets=targets,
+                    family=family,
+                    root=root,
+                    seq_id=seq_id,
+                    bs_scores=bs_scores,
+                ):
+                    continue
+                _remove_path_if_exists(residue_path)
+                if not residue_path.exists():
+                    removed += 1
+    return removed
+
+
 def _needs_t5_worker_seq_ids_file(
     *,
     targets: ArtifactTargets,
@@ -888,7 +934,9 @@ def _run_kinform_parallel_pipeline_file_polling(
     score_cache = BindingSiteScoreCache(binding_sites_path)
     weighted_retry_errors: dict[tuple[str, str, str], int] = {}
 
-    if targets.all_done(score_cache.read()):
+    scores = score_cache.read()
+    if targets.all_done(scores):
+        _cleanup_satisfied_residue_files(targets=targets, bs_scores=scores)
         _log(env, "info", "All KinForm artifacts already exist; skipping parallel pipeline.", job_id=job_id)
         return
 
@@ -1113,7 +1161,6 @@ def _run_kinform_parallel_pipeline_file_polling(
             )
         return True
 
-    scores = score_cache.read()
     for name in launch_order:
         launch_worker(name, scores)
 
@@ -1156,6 +1203,17 @@ def _run_kinform_parallel_pipeline_file_polling(
                 )
 
             scores = score_cache.read()
+            removed_residue = _cleanup_satisfied_residue_files(
+                targets=targets,
+                bs_scores=scores,
+            )
+            if removed_residue:
+                _log(
+                    env,
+                    "debug",
+                    f"cleaned residue_files={removed_residue} after derived outputs completed",
+                    job_id=job_id,
+                )
             if targets.all_done(scores):
                 _log(env, "info", "all target artifacts are complete.", job_id=job_id)
                 break

@@ -77,6 +77,62 @@ class KinFormParallelHelpersTests(unittest.TestCase):
             self.assertEqual(rows["sid_a"], "0.9,0.9")
             self.assertEqual(rows["sid_b"], "0.3,0.4")
 
+    def test_cleanup_removes_mean_only_residue_once_satisfied(self):
+        with tempfile.TemporaryDirectory(prefix="kinform_residue_cleanup_") as tmp:
+            media = Path(tmp) / "media"
+            seq_id = "sid_1"
+            binding_sites = media / "pseq2sites" / "binding_sites_all.tsv"
+            targets = kpo.ArtifactTargets(
+                seq_ids=[seq_id],
+                media_path=media,
+                binding_sites_path=binding_sites,
+                binding_site_existing_ids={seq_id},
+            )
+            root = "prot_t5_layer_19"
+            targets.weighted_targets[(kpo._T5_FAMILY, root)] = set()
+
+            residue = media / "sequence_info" / root / "residue_vecs" / f"{seq_id}.npy"
+            mean = media / "sequence_info" / root / "mean_vecs" / f"{seq_id}.npy"
+            residue.parent.mkdir(parents=True, exist_ok=True)
+            mean.parent.mkdir(parents=True, exist_ok=True)
+            np.save(residue, np.ones((4, 3), dtype=np.float32))
+            np.save(mean, np.ones(3, dtype=np.float32))
+
+            removed = kpo._cleanup_satisfied_residue_files(targets=targets, bs_scores={})
+
+            self.assertEqual(removed, 1)
+            self.assertFalse(residue.exists())
+
+    def test_cleanup_removes_already_weighted_residue_once_satisfied(self):
+        with tempfile.TemporaryDirectory(prefix="kinform_residue_cleanup_") as tmp:
+            media = Path(tmp) / "media"
+            seq_id = "sid_1"
+            binding_sites = media / "pseq2sites" / "binding_sites_all.tsv"
+            targets = kpo.ArtifactTargets(
+                seq_ids=[seq_id],
+                media_path=media,
+                binding_sites_path=binding_sites,
+                binding_site_existing_ids=set(),
+            )
+            root = "prot_t5_last"
+
+            residue = media / "sequence_info" / root / "residue_vecs" / f"{seq_id}.npy"
+            mean = media / "sequence_info" / root / "mean_vecs" / f"{seq_id}.npy"
+            weighted = media / "sequence_info" / root / "weighted_vecs" / f"{seq_id}.npy"
+            for path in (residue, mean, weighted):
+                path.parent.mkdir(parents=True, exist_ok=True)
+            np.save(residue, np.ones((4, 3), dtype=np.float32))
+            np.save(mean, np.ones(3, dtype=np.float32))
+            np.save(weighted, np.ones(3, dtype=np.float32))
+
+            removed = kpo._cleanup_satisfied_residue_files(
+                targets=targets,
+                bs_scores={seq_id: np.ones(4, dtype=np.float32)},
+            )
+
+            self.assertEqual(removed, 1)
+            self.assertFalse(residue.exists())
+
 
 class KinFormParallelOrchestratorTests(unittest.TestCase):
     def test_parallel_pipeline_retries_once_then_succeeds(self):

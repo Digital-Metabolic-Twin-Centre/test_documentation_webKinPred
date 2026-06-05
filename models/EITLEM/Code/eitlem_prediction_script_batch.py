@@ -20,7 +20,11 @@ if _REPO_ROOT_STR in sys.path:
     sys.path.remove(_REPO_ROOT_STR)
 sys.path.insert(0, _REPO_ROOT_STR)
 
-from tools.gpu_embed_service.cache_io import SpoolAsyncCommitter, resolve_missing_ids
+from tools.gpu_embed_service.cache_io import (
+    SpoolAsyncCommitter,
+    remove_manifest_entries,
+    resolve_missing_ids,
+)
 
 # Adjust the import paths according to your project structure
 from KCM import EitlemKcatPredictor
@@ -325,11 +329,16 @@ def main():
             except Exception:
                 pass
         if DELETE_EMBEDDINGS_AFTER_RUN or not run_completed:
-            for seq_id in set(seq_ids):
+            cleanup_seq_ids = set(seq_ids)
+            for seq_id in cleanup_seq_ids:
                 try:
                     os.remove(os.path.join(ESM_EMB_DIR, f"{seq_id}.npy"))
                 except OSError:
                     pass
+            try:
+                remove_manifest_entries(Path(ESM_EMB_DIR), cleanup_seq_ids)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

@@ -631,6 +631,9 @@ def _stream_prot_t5_residue_mean_multi_layer(
 
         if bg_writer is not None:
             bg_writer.join()
+        if legacy_residue_write:
+            for residue_dir in layer_residue_dirs.values():
+                _cleanup_residue_files(residue_dir, keys)
         stream.send(
             {
                 "type": "WORKER_DONE",

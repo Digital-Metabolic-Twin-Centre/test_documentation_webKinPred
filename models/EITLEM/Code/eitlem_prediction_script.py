@@ -35,7 +35,11 @@ if _REPO_ROOT_STR in sys.path:
     sys.path.remove(_REPO_ROOT_STR)
 sys.path.insert(0, _REPO_ROOT_STR)
 
-from tools.gpu_embed_service.cache_io import SpoolAsyncCommitter, resolve_missing_ids
+from tools.gpu_embed_service.cache_io import (
+    SpoolAsyncCommitter,
+    remove_manifest_entries,
+    resolve_missing_ids,
+)
 from KCM import EitlemKcatPredictor
 from KMP import EitlemKmPredictor
 
@@ -140,6 +144,23 @@ def _free_esm() -> None:
     _batch_converter = None
 
 
+def _cleanup_embeddings(seq_ids: list[str]) -> None:
+    cleanup_seq_ids = {str(seq_id).strip() for seq_id in seq_ids if str(seq_id).strip()}
+    if not cleanup_seq_ids:
+        return
+
+    for seq_id in cleanup_seq_ids:
+        try:
+            _emb_path(seq_id).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    try:
+        remove_manifest_entries(ESM_EMB_DIR, cleanup_seq_ids)
+    except Exception:
+        pass
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -160,113 +181,113 @@ def main() -> None:
     substrates = df_input["Substrate SMILES"].tolist()
 
     seq_ids = resolve_seq_ids_via_cli(sequences)
+    run_completed = False
 
-    # ── Phase 1: ensure all ESM1v embeddings are on disk ─────────────────────
-    # GPU case: files already written by the GPU server before this script runs.
-    # CPU fallback: compute them now with ESM1v loaded once, then free the model
-    # so it doesn't compete with the GNN for RAM during Phase 2.
-    ESM_EMB_DIR.mkdir(parents=True, exist_ok=True)
-    missing_ids, _ready_ids = resolve_missing_ids(
-        seq_ids,
-        cache_dir=ESM_EMB_DIR,
-        suffix=".npy",
-    )
-    if missing_ids:
-        seq_by_id: dict[str, str] = {}
-        for seq_id, sequence in zip(seq_ids, sequences):
-            seq_by_id.setdefault(seq_id, sequence)
-        async_workers = max(
-            1,
-            int(
-                os.environ.get(
-                    "EITLEM_CACHE_ASYNC_WORKERS",
-                    os.environ.get("GPU_EMBED_CACHE_ASYNC_WORKERS", "4"),
-                )
-            ),
+    try:
+        # ── Phase 1: ensure all ESM1v embeddings are on disk ─────────────────
+        # GPU case: files already written by the GPU server before this script runs.
+        # CPU fallback: compute them now with ESM1v loaded once, then free the model
+        # so it doesn't compete with the GNN for RAM during Phase 2.
+        ESM_EMB_DIR.mkdir(parents=True, exist_ok=True)
+        missing_ids, _ready_ids = resolve_missing_ids(
+            seq_ids,
+            cache_dir=ESM_EMB_DIR,
+            suffix=".npy",
         )
-        spool_dir = Path(os.environ.get("GPU_EMBED_CACHE_SPOOL_DIR", "/dev/shm/webkinpred-gpu-cache"))
-        spool_fallback = Path(os.environ.get("GPU_EMBED_CACHE_SPOOL_FALLBACK_DIR", "/tmp/webkinpred-gpu-cache"))
-        with SpoolAsyncCommitter(
-            max_workers=async_workers,
-            spool_dir=spool_dir,
-            spool_fallback_dir=spool_fallback,
-        ) as committer:
-            for seq_id in missing_ids:
-                sequence = seq_by_id[seq_id]
-                rep = _compute_residue_repr(sequence)
-                committer.submit_numpy(cache_dir=ESM_EMB_DIR, seq_id=seq_id, array=rep)
-    _free_esm()
+        if missing_ids:
+            seq_by_id: dict[str, str] = {}
+            for seq_id, sequence in zip(seq_ids, sequences):
+                seq_by_id.setdefault(seq_id, sequence)
+            async_workers = max(
+                1,
+                int(
+                    os.environ.get(
+                        "EITLEM_CACHE_ASYNC_WORKERS",
+                        os.environ.get("GPU_EMBED_CACHE_ASYNC_WORKERS", "4"),
+                    )
+                ),
+            )
+            spool_dir = Path(os.environ.get("GPU_EMBED_CACHE_SPOOL_DIR", "/dev/shm/webkinpred-gpu-cache"))
+            spool_fallback = Path(os.environ.get("GPU_EMBED_CACHE_SPOOL_FALLBACK_DIR", "/tmp/webkinpred-gpu-cache"))
+            with SpoolAsyncCommitter(
+                max_workers=async_workers,
+                spool_dir=spool_dir,
+                spool_fallback_dir=spool_fallback,
+            ) as committer:
+                for seq_id in missing_ids:
+                    sequence = seq_by_id[seq_id]
+                    rep = _compute_residue_repr(sequence)
+                    committer.submit_numpy(cache_dir=ESM_EMB_DIR, seq_id=seq_id, array=rep)
+        _free_esm()
 
-    # Load EITLEM prediction model only after ESM1v has been freed.
-    if kinetics_type == "KCAT":
-        eitlem_model = EitlemKcatPredictor(167, 512, 1280, 10, 0.5, 10)
-    else:
-        eitlem_model = EitlemKmPredictor(167, 512, 1280, 10, 0.5, 10)
+        # Load EITLEM prediction model only after ESM1v has been freed.
+        if kinetics_type == "KCAT":
+            eitlem_model = EitlemKcatPredictor(167, 512, 1280, 10, 0.5, 10)
+        else:
+            eitlem_model = EitlemKmPredictor(167, 512, 1280, 10, 0.5, 10)
 
-    eitlem_model.load_state_dict(
-        torch.load(_WEIGHT_PATHS[kinetics_type], map_location=torch.device("cpu"))
-    )
-    eitlem_model.eval()
+        eitlem_model.load_state_dict(
+            torch.load(_WEIGHT_PATHS[kinetics_type], map_location=torch.device("cpu"))
+        )
+        eitlem_model.eval()
 
-    # ── Phase 2: GNN inference, one sample at a time ─────────────────────────
-    _BATCH_SIZE = 1
-    total = len(sequences)
-    predictions: list[float | None] = [None] * total
+        # ── Phase 2: GNN inference, one sample at a time ─────────────────────
+        _BATCH_SIZE = 1
+        total = len(sequences)
+        predictions: list[float | None] = [None] * total
 
-    pending_indices: list[int] = []
-    pending_data:    list[Data] = []
+        pending_indices: list[int] = []
+        pending_data:    list[Data] = []
 
-    def _flush_batch() -> None:
-        if not pending_indices:
-            return
-        batch = Batch.from_data_list(pending_data, follow_batch=["pro_emb"])
-        with torch.no_grad():
-            res = eitlem_model(batch)
-        for local_i, global_idx in enumerate(pending_indices):
-            predictions[global_idx] = math.pow(10, res[local_i].item())
-        pending_indices.clear()
-        pending_data.clear()
+        def _flush_batch() -> None:
+            if not pending_indices:
+                return
+            batch = Batch.from_data_list(pending_data, follow_batch=["pro_emb"])
+            with torch.no_grad():
+                res = eitlem_model(batch)
+            for local_i, global_idx in enumerate(pending_indices):
+                predictions[global_idx] = math.pow(10, res[local_i].item())
+            pending_indices.clear()
+            pending_data.clear()
 
-    for idx, (sequence, substrate, seq_id) in enumerate(zip(sequences, substrates, seq_ids)):
-        try:
-            mol = Chem.MolFromSmiles(substrate)
-            if mol is None:
-                raise ValueError(f"Invalid substrate SMILES: {substrate}")
-
-            mol_feature = torch.FloatTensor(MACCSkeys.GenMACCSKeys(mol).ToList())
-            sequence_rep = torch.FloatTensor(np.load(str(_emb_path(seq_id))))
-
-            pending_indices.append(idx)
-            pending_data.append(Data(x=mol_feature.unsqueeze(0), pro_emb=sequence_rep))
-
-            if len(pending_indices) == _BATCH_SIZE:
-                _flush_batch()
-
-        except Exception as exc:
-            print(f"Error processing sample {idx}: {exc}")
-
-        print(f"Progress: {idx + 1}/{total}", flush=True)
-
-    _flush_batch()
-
-    # ── Cleanup ephemeral ESM1v files ─────────────────────────────────────────
-    # Delete every esm1v file for sequences in this job unless this run is
-    # asked to preserve embeddings for another target stage in the same job.
-    if _DELETE_EMBEDDINGS_AFTER_RUN:
-        for seq_id in set(seq_ids):
+        for idx, (sequence, substrate, seq_id) in enumerate(zip(sequences, substrates, seq_ids)):
             try:
-                _emb_path(seq_id).unlink(missing_ok=True)
-            except OSError:
-                pass  # best-effort cleanup
+                mol = Chem.MolFromSmiles(substrate)
+                if mol is None:
+                    raise ValueError(f"Invalid substrate SMILES: {substrate}")
 
-    # ── Write output CSV ──────────────────────────────────────────────────────
-    pd.DataFrame(
-        {
-            "Substrate SMILES": substrates,
-            "Protein Sequence": sequences,
-            "Predicted Value":  predictions,
-        }
-    ).to_csv(output_file, index=False)
+                mol_feature = torch.FloatTensor(MACCSkeys.GenMACCSKeys(mol).ToList())
+                sequence_rep = torch.FloatTensor(np.load(str(_emb_path(seq_id))))
+
+                pending_indices.append(idx)
+                pending_data.append(Data(x=mol_feature.unsqueeze(0), pro_emb=sequence_rep))
+
+                if len(pending_indices) == _BATCH_SIZE:
+                    _flush_batch()
+
+            except Exception as exc:
+                print(f"Error processing sample {idx}: {exc}")
+
+            print(f"Progress: {idx + 1}/{total}", flush=True)
+
+        _flush_batch()
+
+        # ── Write output CSV ─────────────────────────────────────────────────
+        pd.DataFrame(
+            {
+                "Substrate SMILES": substrates,
+                "Protein Sequence": sequences,
+                "Predicted Value":  predictions,
+            }
+        ).to_csv(output_file, index=False)
+        run_completed = True
+    finally:
+        # Delete every esm1v file for sequences in this job unless this run is
+        # asked to preserve embeddings for another target stage in the same job.
+        # Failed runs always clean up their staged full matrices.
+        _free_esm()
+        if _DELETE_EMBEDDINGS_AFTER_RUN or not run_completed:
+            _cleanup_embeddings(seq_ids)
 
 
 if __name__ == "__main__":
