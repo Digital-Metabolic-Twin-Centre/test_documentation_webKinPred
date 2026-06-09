@@ -1,6 +1,9 @@
 import logging
 
-from django.http import JsonResponse
+import io
+import json
+import threading
+from django.http import JsonResponse, StreamingHttpResponse
 from django.views.decorators.csrf import csrf_exempt
 
 from api.services.progress_service import push_line, finish_session
@@ -36,38 +39,75 @@ def sequence_similarity_summary(request):
         if file_error:
             return file_error
 
-        # Start similarity analysis
-        push_line(session_id, "==> Starting MMseqs2 similarity analysis")
+        # Read into memory so background thread can access it even if request closes
+        csv_bytes = csv_file.read()
+        csv_file_mem = io.BytesIO(csv_bytes)
 
-        # Perform similarity analysis
-        result = analyze_sequence_similarity(csv_file, session_id=session_id)
+        def stream_response():
+            result_container = []
+            error_container = []
 
-        push_line(session_id, "==> Similarity histograms computed successfully")
-        return JsonResponse(result, status=200)
+            def worker():
+                try:
+                    res = analyze_sequence_similarity(csv_file_mem, session_id=session_id)
+                    result_container.append(res)
+                except Exception as e:
+                    error_container.append(e)
 
-    except ValueError as ve:
-        _log.warning(
-            "Sequence similarity validation failed",
-            extra={
-                "event": "similarity.validation_failed",
-                "session_id": session_id,
-                "exception_type": type(ve).__name__,
-            },
-        )
-        push_line(session_id, f"[VALIDATION ERROR] {ve}")
-        return JsonResponse({"error": str(ve)}, status=400)
+            push_line(session_id, "==> Starting MMseqs2 similarity analysis")
+            t = threading.Thread(target=worker)
+            t.start()
+
+            # Yield spaces to keep the connection alive (prevents a 524 Cloudflare timeout)
+            while t.is_alive():
+                yield b" "
+                t.join(timeout=10.0)
+
+            # Execution finished
+            try:
+                if error_container:
+                    e = error_container[0]
+                    if isinstance(e, ValueError):
+                        _log.warning(
+                            "Sequence similarity validation failed",
+                            extra={
+                                "event": "similarity.validation_failed",
+                                "session_id": session_id,
+                                "exception_type": type(e).__name__,
+                            },
+                        )
+                        push_line(session_id, f"[VALIDATION ERROR] {e}")
+                        yield json.dumps({"error": str(e)}).encode("utf-8")
+                    else:
+                        _log.exception(
+                            "Sequence similarity failed",
+                            extra={
+                                "event": "similarity.failed",
+                                "session_id": session_id,
+                                "exception_type": type(e).__name__,
+                            },
+                        )
+                        push_line(session_id, f"[EXCEPTION] {e}")
+                        yield json.dumps({"error": str(e)}).encode("utf-8")
+                else:
+                    push_line(session_id, "==> Similarity histograms computed successfully")
+                    yield json.dumps(result_container[0]).encode("utf-8")
+            finally:
+                finish_session(session_id)
+
+        response = StreamingHttpResponse(stream_response(), content_type="application/json")
+        response['X-Accel-Buffering'] = 'no'
+        return response
 
     except Exception as e:
         _log.exception(
-            "Sequence similarity failed",
+            "Expected error setting up similarity background thread",
             extra={
-                "event": "similarity.failed",
+                "event": "similarity.failed_setup",
                 "session_id": session_id,
                 "exception_type": type(e).__name__,
             },
         )
         push_line(session_id, f"[EXCEPTION] {e}")
-        return JsonResponse({"error": str(e)}, status=500)
-
-    finally:
         finish_session(session_id)
+        return JsonResponse({"error": str(e)}, status=500)

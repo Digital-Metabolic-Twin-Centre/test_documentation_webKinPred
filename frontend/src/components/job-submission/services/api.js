@@ -51,6 +51,9 @@ export async function fetchSequenceSimilaritySummary({ file, useExperimental, va
   formData.append('useExperimental', useExperimental);
   if (validationSessionId) formData.append('validationSessionId', validationSessionId);
   const { data } = await apiClient.post('/sequence-similarity-summary/', formData);
+  if (data && data.error) {
+    throw new Error(data.error);
+  }
   return data;
 }
 
