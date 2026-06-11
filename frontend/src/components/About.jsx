@@ -56,6 +56,7 @@ const METRIC_CARDS = [
 const PARAMETER_BREAKDOWN = [
   {
     key: 'kcat_predictions_completed',
+    tone: 'kcat',
     label: (
       <>
         <span className="about-math">k<sub>cat</sub></span>
@@ -64,6 +65,7 @@ const PARAMETER_BREAKDOWN = [
   },
   {
     key: 'km_predictions_completed',
+    tone: 'km',
     label: (
       <>
         <span className="about-math">K<sub>M</sub></span>
@@ -72,6 +74,7 @@ const PARAMETER_BREAKDOWN = [
   },
   {
     key: 'kcat_km_predictions_completed',
+    tone: 'kcat-km',
     label: (
       <>
         <span className="about-math-frac" aria-label="k sub cat over K sub M">
@@ -134,16 +137,33 @@ const About = () => {
     return numberFormatter.format(value);
   };
 
+  const formatPercent = (value) => {
+    if (typeof value !== 'number' || Number.isNaN(value)) return '--';
+    if (value > 0 && value < 0.1) return '<0.1%';
+    if (value < 10) return `${value.toFixed(1)}%`;
+    return `${Math.round(value)}%`;
+  };
+
   const parameterBreakdown = PARAMETER_BREAKDOWN.map((metric) => ({
     ...metric,
     value: getMetricValue(metric.key),
   }));
 
-  const derivedParameterTotal = parameterBreakdown.every(metric => metric.value !== null)
+  const parameterBreakdownTotal = parameterBreakdown.every(metric => metric.value !== null)
     ? parameterBreakdown.reduce((sum, metric) => sum + metric.value, 0)
     : null;
   const parameterPredictionTotal =
-    getMetricValue('parameter_predictions_completed') ?? derivedParameterTotal;
+    getMetricValue('parameter_predictions_completed') ?? parameterBreakdownTotal;
+  const parameterBreakdownStats = parameterBreakdown.map((metric) => {
+    const value = metric.value ?? 0;
+    const percent = parameterBreakdownTotal ? (value / parameterBreakdownTotal) * 100 : null;
+
+    return {
+      ...metric,
+      percent,
+      barShare: value > 0 ? Math.max(percent ?? 0, 1) : 0,
+    };
+  });
 
   const copyCitation = () => {
     if (!navigator.clipboard) return;
@@ -160,7 +180,6 @@ const About = () => {
     <div className="about-page">
       <div className="about-container container">
         <header className="about-header">
-          <p className="about-eyebrow">Open source kinetic prediction consortium</p>
           <h1>OpenKineticsPredictor</h1>
           <p className="about-hero-copy">
             We developed this platform to make kinetic parameter prediction methods more accessible in an open source setting, so it can continue to expand as more methods are published and introduced.
@@ -169,8 +188,7 @@ const About = () => {
 
         <section className="about-section about-metrics-section" aria-label="Platform usage metrics">
           <div className="about-section-heading">
-            <p className="about-section-label">All-time usage</p>
-            <h2>Platform activity</h2>
+            <h2>Usage</h2>
           </div>
 
           <div className="about-metrics-grid">
@@ -182,17 +200,27 @@ const About = () => {
             ))}
 
             <article className="about-metric-card about-metric-card--parameter">
-              <div>
+              <div className="about-parameter-total">
                 <span className="about-metric-label">Parameter predictions</span>
                 <strong className="about-metric-value">
                   {formatMetric(parameterPredictionTotal)}
                 </strong>
               </div>
               <div className="about-parameter-breakdown" aria-label="Parameter prediction breakdown">
-                {parameterBreakdown.map((metric) => (
+                {parameterBreakdownStats.map((metric) => (
                   <div key={metric.key} className="about-breakdown-row">
-                    <span>{metric.label}</span>
-                    <strong>{formatMetric(metric.value)}</strong>
+                    <div className="about-breakdown-main">
+                      <span className={`about-breakdown-marker about-breakdown-marker--${metric.tone}`} aria-hidden="true" />
+                      <span className="about-breakdown-label">{metric.label}</span>
+                      <strong>{formatMetric(metric.value)}</strong>
+                      <span className="about-breakdown-percent">{formatPercent(metric.percent)}</span>
+                    </div>
+                    <div className="about-breakdown-bar" aria-hidden="true">
+                      <span
+                        className={`about-breakdown-bar-fill about-breakdown-bar-fill--${metric.tone}`}
+                        style={{ width: `${metric.barShare}%` }}
+                      />
+                    </div>
                   </div>
                 ))}
               </div>
@@ -202,15 +230,14 @@ const About = () => {
 
         <section className="about-section about-consortium-section" aria-labelledby="about-consortium-title">
           <div className="about-section-heading">
-            <p className="about-section-label">Consortium</p>
-            <h2 id="about-consortium-title">Collaborating institutions</h2>
+            <h2 id="about-consortium-title">Contributors</h2>
           </div>
 
           <div className="about-institution-grid">
-            {teamInstitutions.map((entry, idx) => (
+            {teamInstitutions.map((entry) => (
               <article key={entry.institution} className="about-institution-card">
                 <div className="about-institution-heading">
-                  <span className="about-institution-index">{String(idx + 1).padStart(2, '0')}</span>
+                  <span className="about-institution-marker" aria-hidden="true" />
                   <div>
                     <h3 className="about-institution-name">{entry.institution}</h3>
                     <p className="about-institution-location">{entry.location}</p>
