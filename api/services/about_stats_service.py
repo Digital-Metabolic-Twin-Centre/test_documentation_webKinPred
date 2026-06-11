@@ -83,16 +83,41 @@ def _compute_about_stats_payload(now_iso: str) -> dict[str, Any]:
             # Policy choice: silently skip missing/unreadable/invalid output files.
             continue
 
+    parameter_predictions_completed = (
+        kcat_predictions_completed
+        + km_predictions_completed
+        + kcat_km_predictions_completed
+    )
+
     return {
         "scope": "all_time",
         "generated_at": now_iso,
         "jobs_completed": jobs_completed,
         "reactions_completed": reactions_completed,
         "unique_protein_sequences": len(unique_sequences),
+        "parameter_predictions_completed": parameter_predictions_completed,
         "kcat_predictions_completed": kcat_predictions_completed,
         "km_predictions_completed": km_predictions_completed,
         "kcat_km_predictions_completed": kcat_km_predictions_completed,
     }
+
+
+def _with_derived_about_stats(payload: dict[str, Any]) -> dict[str, Any]:
+    """Add derived fields to older cached payloads without forcing a refresh."""
+    if "parameter_predictions_completed" in payload:
+        return payload
+
+    prediction_counts = [
+        payload.get("kcat_predictions_completed"),
+        payload.get("km_predictions_completed"),
+        payload.get("kcat_km_predictions_completed"),
+    ]
+    if all(isinstance(value, int) and not isinstance(value, bool) for value in prediction_counts):
+        return {
+            **payload,
+            "parameter_predictions_completed": sum(prediction_counts),
+        }
+    return payload
 
 
 def _deserialise_payload(raw: str) -> dict[str, Any] | None:
@@ -102,7 +127,7 @@ def _deserialise_payload(raw: str) -> dict[str, Any] | None:
         payload = json.loads(raw)
     except Exception:
         return None
-    return payload if isinstance(payload, dict) else None
+    return _with_derived_about_stats(payload) if isinstance(payload, dict) else None
 
 
 def _compute_fallback_without_db() -> dict[str, Any]:

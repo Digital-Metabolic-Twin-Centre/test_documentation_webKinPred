@@ -1,6 +1,6 @@
 // src/components/About.js
 import { useEffect, useState } from 'react';
-import { Button, Form } from 'react-bootstrap';
+import { Check2, Clipboard, Envelope } from 'react-bootstrap-icons';
 import apiClient from './appClient';
 import './ApiDocs/ApiDocs.css';
 
@@ -48,14 +48,17 @@ const teamInstitutions = [
 ];
 
 const METRIC_CARDS = [
-  { key: 'jobs_completed', label: 'Jobs processed' },
-  { key: 'reactions_completed', label: 'Rows predicted' },
+  { key: 'jobs_completed', label: 'Jobs' },
+  { key: 'reactions_completed', label: 'Reactions' },
   { key: 'unique_protein_sequences', label: 'Distinct proteins' },
+];
+
+const PARAMETER_BREAKDOWN = [
   {
     key: 'kcat_predictions_completed',
     label: (
       <>
-        <span className="about-math">k<sub>cat</sub></span> predictions
+        <span className="about-math">k<sub>cat</sub></span>
       </>
     ),
   },
@@ -63,7 +66,7 @@ const METRIC_CARDS = [
     key: 'km_predictions_completed',
     label: (
       <>
-        <span className="about-math">K<sub>M</sub></span> predictions
+        <span className="about-math">K<sub>M</sub></span>
       </>
     ),
   },
@@ -74,8 +77,7 @@ const METRIC_CARDS = [
         <span className="about-math-frac" aria-label="k sub cat over K sub M">
           <span className="about-math-frac__num">k<sub>cat</sub></span>
           <span className="about-math-frac__den">K<sub>M</sub></span>
-        </span>{' '}
-        predictions
+        </span>
       </>
     ),
   },
@@ -96,7 +98,7 @@ const About = () => {
       return null;
     }
   });
-  const citationText = "OpenKineticsPredictor: ....";
+  const citationText = 'OpenKineticsPredictor: open-source platform for kinetic parameter prediction. Citation details to be added.';
 
   useEffect(() => {
     let isMounted = true;
@@ -122,12 +124,30 @@ const About = () => {
     };
   }, []);
 
+  const getMetricValue = (key) => {
+    const value = stats?.[key];
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  };
+
   const formatMetric = (value) => {
-    if (typeof value !== 'number' || Number.isNaN(value)) return '—';
+    if (typeof value !== 'number' || Number.isNaN(value)) return '--';
     return numberFormatter.format(value);
   };
 
+  const parameterBreakdown = PARAMETER_BREAKDOWN.map((metric) => ({
+    ...metric,
+    value: getMetricValue(metric.key),
+  }));
+
+  const derivedParameterTotal = parameterBreakdown.every(metric => metric.value !== null)
+    ? parameterBreakdown.reduce((sum, metric) => sum + metric.value, 0)
+    : null;
+  const parameterPredictionTotal =
+    getMetricValue('parameter_predictions_completed') ?? derivedParameterTotal;
+
   const copyCitation = () => {
+    if (!navigator.clipboard) return;
+
     navigator.clipboard.writeText(citationText)
       .then(() => {
         setCopied(true);
@@ -137,71 +157,96 @@ const About = () => {
   };
 
   return (
-    <div className="api-docs-page">
-      <div className="about-container container pt-4 pb-5">
+    <div className="about-page">
+      <div className="about-container container">
+        <header className="about-header">
+          <p className="about-eyebrow">Open source kinetic prediction consortium</p>
+          <h1>OpenKineticsPredictor</h1>
+          <p className="about-hero-copy">
+            We developed this platform to make kinetic parameter prediction methods more accessible in an open source setting, so it can continue to expand as more methods are published and introduced.
+          </p>
+        </header>
 
-        <div className="about-header">
-          <h2>About OpenKineticsPredictor</h2>
-        </div>
+        <section className="about-section about-metrics-section" aria-label="Platform usage metrics">
+          <div className="about-section-heading">
+            <p className="about-section-label">All-time usage</p>
+            <h2>Platform activity</h2>
+          </div>
 
-        <section className="about-metrics-section" aria-label="Platform usage metrics">
           <div className="about-metrics-grid">
             {METRIC_CARDS.map((metric) => (
               <article key={metric.key} className="about-metric-card">
-                <div className="about-metric-value">{formatMetric(stats?.[metric.key])}</div>
-                <div className="about-metric-label">{metric.label}</div>
+                <span className="about-metric-label">{metric.label}</span>
+                <strong className="about-metric-value">{formatMetric(getMetricValue(metric.key))}</strong>
+              </article>
+            ))}
+
+            <article className="about-metric-card about-metric-card--parameter">
+              <div>
+                <span className="about-metric-label">Parameter predictions</span>
+                <strong className="about-metric-value">
+                  {formatMetric(parameterPredictionTotal)}
+                </strong>
+              </div>
+              <div className="about-parameter-breakdown" aria-label="Parameter prediction breakdown">
+                {parameterBreakdown.map((metric) => (
+                  <div key={metric.key} className="about-breakdown-row">
+                    <span>{metric.label}</span>
+                    <strong>{formatMetric(metric.value)}</strong>
+                  </div>
+                ))}
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section className="about-section about-consortium-section" aria-labelledby="about-consortium-title">
+          <div className="about-section-heading">
+            <p className="about-section-label">Consortium</p>
+            <h2 id="about-consortium-title">Collaborating institutions</h2>
+          </div>
+
+          <div className="about-institution-grid">
+            {teamInstitutions.map((entry, idx) => (
+              <article key={entry.institution} className="about-institution-card">
+                <div className="about-institution-heading">
+                  <span className="about-institution-index">{String(idx + 1).padStart(2, '0')}</span>
+                  <div>
+                    <h3 className="about-institution-name">{entry.institution}</h3>
+                    <p className="about-institution-location">{entry.location}</p>
+                  </div>
+                </div>
+                <p className="about-member-list">{entry.members.join(', ')}</p>
               </article>
             ))}
           </div>
         </section>
 
-        <section style={{ marginBottom: '3rem' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '1rem' }}>
-            {teamInstitutions.map((entry, idx) => (
-              <div key={idx} className="about-institution-card">
-                <div>
-                  <div className="about-institution-name">{entry.institution}</div>
-                  <div className="about-institution-location">
-                    <span style={{ opacity: 0.6 }}>&#x1F4CD;</span>
-                    {entry.location}
-                  </div>
-                </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginTop: '0.25rem' }}>
-                  {entry.members.map((member, mIdx) => (
-                    <span key={mIdx} className="about-member-badge">{member}</span>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="about-contact-section">
-          <h4 className="about-citation-heading">Contact</h4>
-          <p className="about-contact-text">
-            Email{' '}
+        <section className="about-section about-details-grid" aria-label="Contact and citation">
+          <article className="about-detail-card">
+            <div className="about-detail-heading">
+              <h2>Contact</h2>
+            </div>
+            <p className="about-detail-text">
+              For questions about the platform, collaborations, or contributing prediction methods.
+            </p>
             <a href="mailto:s.alwer1@universityofgalway.ie" className="about-contact-link">
-              s.alwer1@universityofgalway.ie
-            </a>.
-          </p>
-        </section>
+              <Envelope aria-hidden="true" />
+              <span>s.alwer1@universityofgalway.ie</span>
+            </a>
+          </article>
 
-        <section style={{ marginBottom: '2rem' }}>
-          <h4 className="about-citation-heading">Citation</h4>
-          <Form.Group controlId="citationText">
-            <Form.Control
-              as="textarea"
-              rows={3}
-              readOnly
-              value={citationText}
-              className="about-citation-area"
-            />
-          </Form.Group>
-          <Button variant="secondary" className="mt-2" onClick={copyCitation}>
-            {copied ? 'Copied!' : 'Copy Citation'}
-          </Button>
+          <article className="about-detail-card about-citation-card">
+            <div className="about-detail-heading about-citation-heading">
+              <h2>Citation</h2>
+              <button type="button" className="about-copy-button" onClick={copyCitation}>
+                {copied ? <Check2 aria-hidden="true" /> : <Clipboard aria-hidden="true" />}
+                <span>{copied ? 'Copied' : 'Copy'}</span>
+              </button>
+            </div>
+            <p className="about-citation-text">{citationText}</p>
+          </article>
         </section>
-
       </div>
     </div>
   );

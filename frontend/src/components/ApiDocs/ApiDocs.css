@@ -12,88 +12,173 @@
 }
 
 /* ------------------------------------------------------------
-   About page components (replaces inline styles)
+   About page components
    ------------------------------------------------------------ */
+.about-page {
+  --about-bg: #101318;
+  --about-surface: #171b22;
+  --about-surface-soft: #1e242d;
+  --about-border: #2b3440;
+  --about-border-strong: #3a4654;
+  --about-text: #f3f6f8;
+  --about-muted: #aeb8c4;
+  --about-subtle: #7f8a99;
+  --about-accent: #8fbad5;
+  --about-accent-soft: #203746;
+  --about-link: #b5d7ea;
+  --about-button-bg: #dce8ef;
+  --about-button-text: #101820;
+  --about-button-bg-hover: #c8dce8;
+  background: var(--about-bg);
+  color: var(--about-text);
+  min-height: 100vh;
+  width: 100%;
+}
+
+[data-theme="light"] .about-page {
+  --about-bg: #f6f8fb;
+  --about-surface: #ffffff;
+  --about-surface-soft: #edf2f6;
+  --about-border: #d8e1ea;
+  --about-border-strong: #c3d0dc;
+  --about-text: #17202a;
+  --about-muted: #5b6876;
+  --about-subtle: #788594;
+  --about-accent: #2f6f8f;
+  --about-accent-soft: #e4f0f6;
+  --about-link: #215a76;
+  --about-button-bg: #183040;
+  --about-button-text: #ffffff;
+  --about-button-bg-hover: #24475d;
+}
+
 .about-container {
-  color: #e8e6f0;
-  max-width: 900px;
+  color: var(--about-text);
+  max-width: 1120px;
+  padding-top: 2.75rem;
+  padding-bottom: 5rem;
 }
 
 .about-header {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  padding-bottom: 1.5rem;
-  margin-bottom: 2.5rem;
-}
-
-.about-header h2 {
-  font-weight: 700;
-  color: #ffffff;
+  border-bottom: 1px solid var(--about-border);
   margin-bottom: 0;
+  max-width: 860px;
+  padding-bottom: 2.25rem;
 }
 
-.about-metrics-section {
-  margin-bottom: 2rem;
-  --about-metric-bg: rgba(20, 22, 34, 0.72);
-  --about-metric-border: rgba(195, 205, 235, 0.16);
-  --about-metric-border-hover: rgba(210, 220, 245, 0.28);
-  --about-metric-value: #f5f7ff;
-  --about-metric-label: rgba(214, 221, 240, 0.72);
-  --about-metric-shadow: 0 1px 2px rgba(0, 0, 0, 0.16);
+.about-eyebrow,
+.about-section-label {
+  color: var(--about-accent);
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1.4;
+  margin: 0 0 0.55rem;
+  text-transform: uppercase;
+}
+
+.about-header h1 {
+  color: var(--about-text);
+  font-size: 2.45rem;
+  font-weight: 750;
+  line-height: 1.08;
+  margin: 0;
+}
+
+.about-hero-copy {
+  color: var(--about-muted);
+  font-size: 1.03rem;
+  line-height: 1.75;
+  margin: 1rem 0 0;
+  max-width: 760px;
+}
+
+.about-section {
+  border-bottom: 1px solid var(--about-border);
+  padding: 2.55rem 0;
+}
+
+.about-section:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.about-section-heading {
+  margin-bottom: 1.15rem;
+}
+
+.about-section-heading h2,
+.about-detail-heading h2 {
+  color: var(--about-text);
+  font-size: 1.34rem;
+  font-weight: 700;
+  line-height: 1.25;
+  margin: 0;
 }
 
 .about-metrics-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.62rem;
-}
-
-@media (min-width: 768px) {
-  .about-metrics-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
-@media (min-width: 992px) {
-  .about-metrics-grid {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-  }
+  gap: 0.85rem;
+  grid-template-columns: repeat(1, minmax(0, 1fr));
 }
 
 .about-metric-card {
-  background: var(--about-metric-bg);
-  border: 1px solid var(--about-metric-border);
+  background: var(--about-surface);
+  border: 1px solid var(--about-border);
   border-radius: 8px;
-  box-shadow: var(--about-metric-shadow);
-  padding: 0.68rem 0.78rem;
-  min-height: 82px;
   display: flex;
   flex-direction: column;
+  gap: 0.75rem;
   justify-content: space-between;
-  gap: 0.3rem;
-  transition: border-color 160ms ease, background-color 160ms ease;
+  min-height: 138px;
+  padding: 1rem;
 }
 
-.about-metric-card:hover {
-  border-color: var(--about-metric-border-hover);
-}
-
-.about-metric-value {
-  font-family: "JetBrains Mono", "SFMono-Regular", "Roboto Mono", Menlo, Consolas, monospace;
-  font-variant-numeric: tabular-nums lining-nums;
-  font-feature-settings: "tnum" 1, "lnum" 1;
-  font-weight: 650;
-  font-size: clamp(1.03rem, 1.35vw, 1.2rem);
-  color: var(--about-metric-value);
-  letter-spacing: -0.02em;
-  line-height: 1.2;
+.about-metric-card--parameter {
+  border-color: var(--about-border-strong);
 }
 
 .about-metric-label {
-  font-size: 0.74rem;
-  color: var(--about-metric-label);
-  font-weight: 500;
-  letter-spacing: 0.01em;
-  line-height: 1.3;
+  color: var(--about-muted);
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.about-metric-value {
+  color: var(--about-text);
+  display: block;
+  font-family: "JetBrains Mono", "SFMono-Regular", "Roboto Mono", Menlo, Consolas, monospace;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+  font-size: 1.85rem;
+  font-variant-numeric: tabular-nums lining-nums;
+  font-weight: 750;
+  line-height: 1.12;
+}
+
+.about-parameter-breakdown {
+  border-top: 1px solid var(--about-border);
+  display: grid;
+  gap: 0.45rem;
+  padding-top: 0.7rem;
+}
+
+.about-breakdown-row {
+  align-items: center;
+  color: var(--about-muted);
+  display: flex;
+  font-size: 0.86rem;
+  gap: 1rem;
+  justify-content: space-between;
+  line-height: 1.35;
+}
+
+.about-breakdown-row strong {
+  color: var(--about-text);
+  font-family: "JetBrains Mono", "SFMono-Regular", "Roboto Mono", Menlo, Consolas, monospace;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+  font-variant-numeric: tabular-nums lining-nums;
+  font-weight: 700;
 }
 
 .about-math {
@@ -103,15 +188,15 @@
 }
 
 .about-math sub {
-  font-style: italic;
   font-size: 0.74em;
+  font-style: italic;
   line-height: 1;
 }
 
 .about-math-frac {
+  align-items: center;
   display: inline-flex;
   flex-direction: column;
-  align-items: center;
   justify-content: center;
   line-height: 1;
   vertical-align: middle;
@@ -121,14 +206,14 @@
 .about-math-frac__den {
   font-family: "Cambria Math", "STIX Two Math", "Times New Roman", serif;
   font-style: italic;
-  white-space: nowrap;
   padding: 0 0.1em;
+  white-space: nowrap;
 }
 
 .about-math-frac__num {
   border-bottom: 1px solid currentColor;
-  padding-bottom: 0.05em;
   margin-bottom: 0.04em;
+  padding-bottom: 0.05em;
 }
 
 .about-math-frac__den {
@@ -137,82 +222,189 @@
 
 .about-math-frac__num sub,
 .about-math-frac__den sub {
-  font-style: italic;
   font-size: 0.74em;
+  font-style: italic;
   line-height: 1;
 }
 
+.about-institution-grid {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: repeat(1, minmax(0, 1fr));
+}
+
 .about-institution-card {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 10px;
-  padding: 1.1rem 1.25rem;
+  background: var(--about-surface);
+  border: 1px solid var(--about-border);
+  border-radius: 8px;
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 0.85rem;
+  padding: 1.05rem;
+}
+
+.about-institution-heading {
+  align-items: flex-start;
+  display: flex;
+  gap: 0.85rem;
+}
+
+.about-institution-index {
+  align-items: center;
+  background: var(--about-accent-soft);
+  border: 1px solid var(--about-border-strong);
+  border-radius: 6px;
+  color: var(--about-accent);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-family: "JetBrains Mono", "SFMono-Regular", "Roboto Mono", Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  font-weight: 700;
+  height: 2.15rem;
+  justify-content: center;
+  width: 2.15rem;
 }
 
 .about-institution-name {
-  font-weight: 600;
-  color: #ffffff;
-  font-size: 0.95rem;
-  line-height: 1.4;
-  margin-bottom: 0.2rem;
+  color: var(--about-text);
+  font-size: 0.96rem;
+  font-weight: 700;
+  line-height: 1.45;
+  margin: 0;
 }
 
 .about-institution-location {
-  font-size: 0.8rem;
-  color: rgba(180, 160, 255, 0.8);
-  display: flex;
+  color: var(--about-subtle);
+  font-size: 0.85rem;
+  line-height: 1.45;
+  margin: 0.25rem 0 0;
+}
+
+.about-member-list {
+  color: var(--about-muted);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.about-details-grid {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.about-detail-card {
+  background: var(--about-surface);
+  border: 1px solid var(--about-border);
+  border-radius: 8px;
+  padding: 1.1rem;
+}
+
+.about-detail-heading {
   align-items: center;
-  gap: 0.35rem;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-bottom: 0.85rem;
 }
 
-.about-member-badge {
-  background: rgba(180, 160, 255, 0.12);
-  border: 1px solid rgba(180, 160, 255, 0.25);
-  color: #d4c5ff;
-  border-radius: 20px;
-  padding: 0.2rem 0.7rem;
-  font-size: 0.82rem;
-  font-weight: 500;
-}
-
-.about-citation-heading {
-  font-weight: 600;
-  color: #ffffff;
-  border-left: 3px solid rgba(180, 160, 255, 0.7);
-  padding-left: 0.75rem;
-  margin-bottom: 1rem;
-}
-
-.about-citation-area {
-  background: #0e0c1f !important;
-  color: #dcd8f0 !important;
-  border: 1px solid rgba(140, 115, 230, 0.28) !important;
-  border-radius: 0.5rem;
-}
-
-.about-contact-section {
-  margin-bottom: 2rem;
-}
-
-.about-contact-text {
-  margin-bottom: 0;
-  font-size: 0.95rem;
-  color: rgba(232, 230, 240, 0.86);
+.about-detail-text {
+  color: var(--about-muted);
+  font-size: 0.94rem;
+  line-height: 1.65;
+  margin: 0 0 1rem;
 }
 
 .about-contact-link {
-  color: #d8c8ff;
-  font-weight: 600;
-  text-decoration: underline;
-  text-decoration-color: rgba(216, 200, 255, 0.45);
-  text-underline-offset: 2px;
+  align-items: center;
+  background: var(--about-surface-soft);
+  border: 1px solid var(--about-border-strong);
+  border-radius: 8px;
+  color: var(--about-link);
+  display: inline-flex;
+  font-size: 0.95rem;
+  font-weight: 700;
+  gap: 0.55rem;
+  line-height: 1.35;
+  padding: 0.68rem 0.8rem;
+  text-decoration: none;
 }
 
-.about-contact-link:hover {
-  color: #eadfff;
+.about-contact-link:hover,
+.about-contact-link:focus {
+  color: var(--about-link);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.about-contact-link svg {
+  flex: 0 0 auto;
+}
+
+.about-copy-button {
+  align-items: center;
+  background: var(--about-button-bg);
+  border: 1px solid var(--about-button-bg);
+  border-radius: 6px;
+  color: var(--about-button-text);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.86rem;
+  font-weight: 700;
+  gap: 0.45rem;
+  line-height: 1;
+  padding: 0.58rem 0.72rem;
+}
+
+.about-copy-button:hover,
+.about-copy-button:focus {
+  background: var(--about-button-bg-hover);
+  border-color: var(--about-button-bg-hover);
+}
+
+.about-citation-text {
+  background: var(--about-surface-soft);
+  border: 1px solid var(--about-border);
+  border-radius: 8px;
+  color: var(--about-muted);
+  font-size: 0.94rem;
+  line-height: 1.65;
+  margin: 0;
+  padding: 0.9rem;
+}
+
+@media (min-width: 576px) {
+  .about-metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 768px) {
+  .about-container {
+    padding-top: 4rem;
+  }
+
+  .about-header h1 {
+    font-size: 3.2rem;
+  }
+
+  .about-hero-copy {
+    font-size: 1.08rem;
+  }
+
+  .about-institution-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 992px) {
+  .about-metrics-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .about-details-grid {
+    grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr);
+  }
 }
 
 /* Contribute page link */

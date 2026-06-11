@@ -103,6 +103,7 @@ class AboutStatsServiceTests(unittest.TestCase):
         self.assertEqual(payload["jobs_completed"], 7)
         self.assertEqual(payload["reactions_completed"], 5)
         self.assertEqual(payload["unique_protein_sequences"], 3)
+        self.assertEqual(payload["parameter_predictions_completed"], 5)
         self.assertEqual(payload["kcat_predictions_completed"], 2)
         self.assertEqual(payload["km_predictions_completed"], 1)
         self.assertEqual(payload["kcat_km_predictions_completed"], 2)
@@ -115,6 +116,7 @@ class AboutStatsServiceTests(unittest.TestCase):
             "jobs_completed": 9,
             "reactions_completed": 8,
             "unique_protein_sequences": 7,
+            "parameter_predictions_completed": 15,
             "kcat_predictions_completed": 6,
             "km_predictions_completed": 5,
             "kcat_km_predictions_completed": 4,
@@ -137,6 +139,7 @@ class AboutStatsServiceTests(unittest.TestCase):
             "jobs_completed": 1,
             "reactions_completed": 2,
             "unique_protein_sequences": 3,
+            "parameter_predictions_completed": 15,
             "kcat_predictions_completed": 4,
             "km_predictions_completed": 5,
             "kcat_km_predictions_completed": 6,
@@ -180,6 +183,7 @@ class AboutStatsEndpointTests(unittest.TestCase):
             "jobs_completed": 1,
             "reactions_completed": 2,
             "unique_protein_sequences": 3,
+            "parameter_predictions_completed": 15,
             "kcat_predictions_completed": 4,
             "km_predictions_completed": 5,
             "kcat_km_predictions_completed": 6,
@@ -196,6 +200,7 @@ class AboutStatsEndpointTests(unittest.TestCase):
         self.assertIsInstance(data["jobs_completed"], int)
         self.assertIsInstance(data["reactions_completed"], int)
         self.assertIsInstance(data["unique_protein_sequences"], int)
+        self.assertIsInstance(data["parameter_predictions_completed"], int)
         self.assertIsInstance(data["kcat_predictions_completed"], int)
         self.assertIsInstance(data["km_predictions_completed"], int)
         self.assertIsInstance(data["kcat_km_predictions_completed"], int)
