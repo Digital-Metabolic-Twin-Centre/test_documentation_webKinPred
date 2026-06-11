@@ -1,6 +1,7 @@
 // src/components/About.js
 import { useEffect, useState } from 'react';
 import { Check2, Clipboard, Envelope } from 'react-bootstrap-icons';
+import { useLocation } from 'react-router-dom';
 import apiClient from './appClient';
 import './ApiDocs/ApiDocs.css';
 
@@ -90,6 +91,7 @@ const numberFormatter = new Intl.NumberFormat('en-US');
 const ABOUT_STATS_STORAGE_KEY = 'about_stats_payload_v1';
 
 const About = () => {
+  const location = useLocation();
   const [copied, setCopied] = useState(false);
   const [stats, setStats] = useState(() => {
     try {
@@ -126,6 +128,17 @@ const About = () => {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (location.hash !== '#contact') return;
+
+    window.requestAnimationFrame(() => {
+      document.getElementById('contact')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    });
+  }, [location.hash]);
 
   const getMetricValue = (key) => {
     const value = stats?.[key];
@@ -250,7 +263,7 @@ const About = () => {
         </section>
 
         <section className="about-section about-details-grid" aria-label="Contact and citation">
-          <article className="about-detail-card">
+          <article id="contact" className="about-detail-card about-contact-card">
             <div className="about-detail-heading">
               <h2>Contact</h2>
             </div>

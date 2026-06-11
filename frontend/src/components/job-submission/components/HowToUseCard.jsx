@@ -72,7 +72,7 @@ export default function HowToUseCard({ methods = {} }) {
           <ExclamationTriangle size={24} className="me-3 howto-limit-icon" />
           <div>
             Default usage is limited to <strong>20,000 reactions per day</strong>. If you need a higher limit, please{' '}
-            <Link to="/about" className="howto-limit-link">contact us</Link>.
+            <Link to="/about#contact" className="howto-limit-link">contact us</Link>.
           </div>
         </Alert>
         <Row className="text-center">
