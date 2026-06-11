@@ -8,11 +8,11 @@ const teamInstitutions = [
   {
     institution: 'Digital Metabolic Twin Center, University of Galway',
     location: 'Galway, Ireland',
-    members: ['Ronan Fleming', 'Saleh Alwer', 'Farid Zare', 'Jack McGoldrick'],
+    members: ['Saleh Alwer', 'Chidi Egwu', 'Farid Zare', 'Jack McGoldrick', 'Ronan Fleming'],
   },
   {
     institution: 'Faculty of Science, Technology and Medicine, University of Luxembourg',
-    location: 'Esch-sur-Alzette, Luxembourg',
+    location: 'Belvaux, Luxembourg',
     members: ['Thomas Sauter', 'Hugues Escoffier'],
   },
   {
@@ -28,16 +28,16 @@ const teamInstitutions = [
   {
     institution: 'Maranas Group, Department of Chemical Engineering, The Pennsylvania State University',
     location: 'University Park, PA, USA',
-    members: ['Costas D. Maranas', 'Veda Sheersh Boorla', 'Somtirtha Santar'],
+    members: ['Costas D. Maranas', 'Veda Boorla', 'Somtirtha Santra'],
   },
   {
-    institution: 'Shenzhen Zelixir Biotech Co. Ltd',
-    location: 'Shenzhen, Guangdong, China',
+    institution: 'Shanghai Zelixir Biotech Co. Ltd',
+    location: 'Shanghai, China',
     members: ['Liangzhen Zheng'],
   },
   {
-    institution: 'School of Physics, Shandong University',
-    location: 'Jinan, China',
+    institution: 'College of Computing and Data Science, Nanyang Technological University',
+    location: 'Singapore',
     members: ['Zechen Wang'],
   },
   {
