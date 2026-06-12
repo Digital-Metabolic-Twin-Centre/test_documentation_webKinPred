@@ -64,12 +64,12 @@ try:
 except Exception:  # pragma: no cover - fallback for minimal local runtimes
     remove_manifest_entries = None  # type: ignore[assignment]
 
-from api.utils.convert_to_mol import substrate_as_smiles
 from models import DrugBAN
 from utils import set_seed, prottrans_graph_collate_func
 from configs import get_cfg_defaults
 from torch.utils.data import Dataset, DataLoader
 from dgllife.utils import smiles_to_bigraph, CanonicalAtomFeaturizer, CanonicalBondFeaturizer
+from rdkit import Chem
 
 DATA_ROOT   = os.environ.get("IECATA_DATA", SCRIPT_DIR)
 EMBED_DIR   = os.environ.get("IECATA_EMBED_DIR", "")
@@ -80,6 +80,25 @@ MODEL_PATH  = os.path.join(
 MAX_PROT_LEN = 1200   # IECata pads protein dim to this in the dataloader
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def substrate_as_smiles(representation, canonicalize=True):
+    text = str(representation or "").strip()
+    if not text:
+        return None
+
+    try:
+        if text.startswith("InChI="):
+            mol = Chem.MolFromInchi(text)
+        else:
+            mol = Chem.MolFromSmiles(text)
+            if mol is None:
+                mol = Chem.MolFromInchi(text)
+        if mol is None:
+            return None
+        return Chem.MolToSmiles(mol, canonical=canonicalize)
+    except Exception:
+        return None
 
 
 def load_prott5():
