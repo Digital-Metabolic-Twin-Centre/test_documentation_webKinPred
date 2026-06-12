@@ -64,6 +64,7 @@ try:
 except Exception:  # pragma: no cover - fallback for minimal local runtimes
     remove_manifest_entries = None  # type: ignore[assignment]
 
+from api.utils.convert_to_mol import substrate_as_smiles
 from models import DrugBAN
 from utils import set_seed, prottrans_graph_collate_func
 from configs import get_cfg_defaults
@@ -323,7 +324,8 @@ def main():
         for idx, row in enumerate(rows):
             sequence = str(row.get("sequence", "")).strip()
             seq_id = _cache_key_for_sequence(sequence, row.get("seq_id", ""))
-            smiles = str(row.get("substrates", "")).strip()
+            raw_substrate = str(row.get("substrates", "")).strip()
+            smiles = substrate_as_smiles(raw_substrate, canonicalize=True)
             npy = os.path.join(EMBED_DIR, f"{seq_id}.npy") if seq_id else ""
 
             if not seq_id or not smiles or not sequence:
