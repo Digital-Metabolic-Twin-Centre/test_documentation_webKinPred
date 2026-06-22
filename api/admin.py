@@ -1,4 +1,5 @@
 # api/admin.py
+from django import forms
 from django.contrib import admin
 from django.utils.html import format_html
 from django.urls import reverse
@@ -218,6 +219,30 @@ class JobProgressStageAdmin(admin.ModelAdmin):
     readonly_fields = ["updated_at"]
 
 
+class ApiKeyAdminForm(forms.ModelForm):
+    """ApiKey form with an inline ReconXKG allowlist toggle."""
+
+    recon_xkg_enabled = forms.BooleanField(
+        required=False,
+        label="ReconXKG enabled",
+        help_text=(
+            "Allow this key to use the (undocumented) recon_xkg cached-prediction "
+            "mode. Changes take effect within ~30s."
+        ),
+    )
+
+    class Meta:
+        model = ApiKey
+        fields = "__all__"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance and self.instance.pk:
+            self.fields["recon_xkg_enabled"].initial = ReconXkgAllowedKey.objects.filter(
+                api_key=self.instance, is_active=True
+            ).exists()
+
+
 @admin.register(ApiKey)
 class ApiKeyAdmin(admin.ModelAdmin):
     """
@@ -229,6 +254,8 @@ class ApiKeyAdmin(admin.ModelAdmin):
     ``python manage.py create_api_key``.
     """
 
+    form = ApiKeyAdminForm
+
     list_display = [
         "key_prefix",
         "label",
@@ -236,6 +263,7 @@ class ApiKeyAdmin(admin.ModelAdmin):
         "custom_daily_limit",
         "effective_daily_limit_display",
         "is_active",
+        "recon_xkg_status",
         "created_at",
         "last_used",
     ]
@@ -262,11 +290,12 @@ class ApiKeyAdmin(admin.ModelAdmin):
                 ),
             },
         ),
+        ("ReconXKG", {"fields": ("recon_xkg_enabled",)}),
         ("Ownership", {"fields": ("user",)}),
         ("Timestamps", {"fields": ("created_at", "last_used")}),
     )
 
-    actions = ["revoke_keys", "activate_keys"]
+    actions = ["revoke_keys", "activate_keys", "enable_recon_xkg", "disable_recon_xkg"]
 
     @admin.display(description="User IP")
     def user_ip(self, obj):
@@ -277,6 +306,31 @@ class ApiKeyAdmin(admin.ModelAdmin):
     def effective_daily_limit_display(self, obj):
         return obj.effective_daily_limit
 
+    @admin.display(description="ReconXKG", boolean=True)
+    def recon_xkg_status(self, obj):
+        return ReconXkgAllowedKey.objects.filter(api_key=obj, is_active=True).exists()
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        self._set_recon_xkg(obj, form.cleaned_data.get("recon_xkg_enabled", False))
+
+    @staticmethod
+    def _set_recon_xkg(api_key, enabled: bool) -> None:
+        if enabled:
+            ReconXkgAllowedKey.objects.update_or_create(
+                api_key=api_key, defaults={"is_active": True}
+            )
+        else:
+            ReconXkgAllowedKey.objects.filter(api_key=api_key).update(is_active=False)
+        # Drop the short-lived in-process allowlist cache so the change is
+        # reflected immediately on the next submission.
+        try:
+            from api.utils.recon_xkg import _allow_cache
+
+            _allow_cache.pop(api_key.pk, None)
+        except Exception:
+            pass
+
     @admin.action(description="Revoke selected API keys")
     def revoke_keys(self, request, queryset):
         count = queryset.update(is_active=False)
@@ -286,6 +340,18 @@ class ApiKeyAdmin(admin.ModelAdmin):
     def activate_keys(self, request, queryset):
         count = queryset.update(is_active=True)
         self.message_user(request, f"{count} API key(s) re-activated.")
+
+    @admin.action(description="Enable ReconXKG for selected keys")
+    def enable_recon_xkg(self, request, queryset):
+        for api_key in queryset:
+            self._set_recon_xkg(api_key, True)
+        self.message_user(request, f"ReconXKG enabled for {queryset.count()} key(s).")
+
+    @admin.action(description="Disable ReconXKG for selected keys")
+    def disable_recon_xkg(self, request, queryset):
+        for api_key in queryset:
+            self._set_recon_xkg(api_key, False)
+        self.message_user(request, f"ReconXKG disabled for {queryset.count()} key(s).")
 
 
 @admin.register(Sequence)
