@@ -169,20 +169,12 @@ def validate_substrate_list_schema(dataframe: pd.DataFrame) -> List[Dict[str, An
         invalid_substrates_for_row = []
         invalid_products_for_row = []
 
+        if not substrate_tokens:
+            invalid_substrates_for_row.append({"position": None, "value": subs})
+
         for position, token in enumerate(substrate_tokens, start=1):
             if safe_convert_to_mol(token) is None:
                 invalid_substrates_for_row.append({"position": position, "value": token})
-
-        if not substrate_tokens:
-            invalid_substrates.append(
-                {
-                    "row": row_num,
-                    "value": subs,
-                    "reason": "Empty substrate list",
-                    "invalid_components": [],
-                }
-            )
-            continue
 
         if has_products:
             prods = dataframe["Products"].iloc[i]
@@ -200,13 +192,48 @@ def validate_substrate_list_schema(dataframe: pd.DataFrame) -> List[Dict[str, An
                 {
                     "row": row_num,
                     "value": invalid_values,
-                    "reason": "Invalid substrate/product SMILES/InChI",
+                    "reason": (
+                        "Empty substrate list"
+                        if not substrate_tokens and not invalid_products_for_row
+                        else "Invalid substrate/product SMILES/InChI"
+                    ),
                     "invalid_substrates": invalid_substrates_for_row,
                     "invalid_products": invalid_products_for_row,
                 }
             )
 
     return invalid_substrates
+
+
+def validate_products_column(dataframe: pd.DataFrame) -> List[Dict[str, Any]]:
+    """Validate every supplied product token for mandatory submission preflight."""
+    if "Products" not in dataframe.columns:
+        return []
+
+    invalid_products: list[dict[str, Any]] = []
+    for row_index, raw_products in enumerate(dataframe["Products"], start=1):
+        tokens = split_substrate_list(raw_products)
+        if not tokens:
+            invalid_products.append(
+                {
+                    "row": row_index,
+                    "position": None,
+                    "value": raw_products,
+                    "reason": "Empty product list",
+                }
+            )
+            continue
+        for position, token in enumerate(tokens, start=1):
+            if safe_convert_to_mol(token) is None:
+                invalid_products.append(
+                    {
+                        "row": row_index,
+                        "position": position,
+                        "value": token,
+                        "reason": "Invalid product SMILES/InChI",
+                    }
+                )
+    return invalid_products
 
 
 def validate_substrates(dataframe: pd.DataFrame) -> List[Dict[str, Any]]:

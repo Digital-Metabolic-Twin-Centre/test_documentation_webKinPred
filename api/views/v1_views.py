@@ -142,6 +142,8 @@ def api_list_methods(request):
           "supports":          list[str],   // e.g. ["kcat", "Km", "kcat/Km"]
           "inputFormat":       str,         // backend contract: "single" or "multi"
           "acceptedCsvTypes":  list[str],   // UI/API input schemas accepted by the method
+          "acceptedCsvTypesByTarget": object,
+          "inputBehaviorByTarget": object,  // expanded_pair/native_multi/native_full_reaction
           "maxSeqLen":         int | null,  // null means no limit
           "requiredColumns":   list[str],   // includes "Protein Sequence"
           "substrateFormat":   str,
@@ -161,14 +163,31 @@ def api_list_methods(request):
     def _method_obj(key, desc):
         max_len = None if desc.max_seq_len == float("inf") else int(desc.max_seq_len)
         required_cols = ["Protein Sequence"] + list(desc.col_to_kwarg.keys())
-        if desc.input_format == "multi":
-            accepted_csv_types = ["full_reaction"]
+        accepted_by_target = {
+            target: desc.accepted_csv_types_for_target(target)
+            for target in desc.supports
+        }
+        csv_type_order = ["single", "multi", "substrate_list", "full_reaction"]
+        accepted_csv_types = [
+            csv_type
+            for csv_type in csv_type_order
+            if any(csv_type in accepted for accepted in accepted_by_target.values())
+        ]
+        behavior_by_target = {
+            target: desc.input_behavior(target)
+            for target in desc.supports
+        }
+        if any(behavior == "native_full_reaction" for behavior in behavior_by_target.values()):
             substrate_fmt = (
                 "Full reaction: semicolon-separated SMILES or InChI strings in "
                 "Substrates and Products"
             )
+        elif any(behavior == "native_multi" for behavior in behavior_by_target.values()):
+            substrate_fmt = (
+                "CatPred kcat consumes semicolon-separated Substrates as one combined "
+                "input; CatPred Km predicts each substrate separately"
+            )
         else:
-            accepted_csv_types = ["single", "multi", "substrate_list", "full_reaction"]
             substrate_fmt = (
                 "Use Substrate for one molecular input, or semicolon-separated Substrates. "
                 "For Substrates inputs, kcat is reduced by maximum; Km and kcat/Km remain "
@@ -185,6 +204,8 @@ def api_list_methods(request):
             "supports": desc.supports,
             "inputFormat": desc.input_format,
             "acceptedCsvTypes": accepted_csv_types,
+            "acceptedCsvTypesByTarget": accepted_by_target,
+            "inputBehaviorByTarget": behavior_by_target,
             "maxSeqLen": max_len,
             "requiredColumns": required_cols,
             "substrateFormat": substrate_fmt,
@@ -216,9 +237,11 @@ def api_list_methods(request):
                     "to a method key)."
                 ),
                 "substrateLists": (
-                    "Pair-based methods accept semicolon-separated values in 'Substrates'. "
+                    "Single-substrate methods accept semicolon-separated values in 'Substrates'. "
                     "Reaction kcat uses the maximum successful child prediction; Km and "
-                    "kcat/Km use ordered JSON arrays. TurNup additionally requires 'Products'."
+                    "kcat/Km use ordered JSON arrays. CatPred kcat consumes the complete "
+                    "substrate set natively. TurNup additionally consumes 'Products'; other "
+                    "methods preserve but ignore them."
                 ),
                 "quota": "Each input reaction row counts once against your daily quota.",
             },

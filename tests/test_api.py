@@ -8,6 +8,7 @@ Usage:
     python tests/test_api.py                        # uses the default key below
     python tests/test_api.py --key ak_yourkey       # pass a key on the command line
     python tests/test_api.py --base http://host:8000/api/v1   # different server
+    python tests/test_api.py --test-multi-sub-for-single-sub-methods  # slow value checks
 """
 
 import argparse
@@ -48,11 +49,12 @@ KCAT_METHOD_IDS = [
     "CataPro",
     "CatPred",
     "OmniESI",
+    "RealKcat",
 ]
 # Km-capable methods
-KM_METHOD_IDS = ["EITLEM", "UniKP", "KinForm-H", "CataPro", "CatPred", "OmniESI", "MMISA-KM"]
+KM_METHOD_IDS = ["EITLEM", "UniKP", "KinForm-H", "CataPro", "CatPred", "OmniESI", "RealKcat", "MMISA-KM"]
 # kcat/Km-capable methods
-KCAT_KM_METHOD_IDS = ["CataPro"]
+KCAT_KM_METHOD_IDS = ["CataPro", "IECata"]
 # All recognised method IDs (de-duplicated, lowercase)
 ALL_METHOD_IDS = sorted({m.lower() for m in KCAT_METHOD_IDS + KM_METHOD_IDS + KCAT_KM_METHOD_IDS})
 
@@ -90,8 +92,8 @@ SINGLE_SUBSTRATE_CSV = textwrap.dedent("""\
     MCTAITLNGNSNYFGRNLDLDFSYGEEVIITPAEYEFKFRKEKAIKNHKSLIGVGIVANDYPLYFDAINEDGLGMAGLNFPGNAYYSDALENDKDNITPFEFIPWILGQCSDVNEARNLVEKINLINLSFSEQLPLAGLHWLIADREKSIVVEVTKSGVHIYDNPIGILTNNPEFNYQMYNLNKYRNLSISTPQNTFSDSVDLKVDGTGFGGIGLPGDVSPESRFVRATFSKLNSSKGMTVEEDITQFFHILGTVEQIKGVNKTESGKEEYTVYSNCYDLDNKTLYYTTYENRQIVAVTLNKDKDGNRLVTYPFERKQIINKLN,OCC(O)CO
 """)
 
-# CatPred compatibility fixture: uses the single "Substrate" column where
-# co-substrates are dot-joined (e.g., "A.B"), as required for CatPred kcat.
+# CatPred compatibility fixture: the historical single "Substrate" column
+# with dot-joined co-substrates remains accepted for CatPred kcat.
 CATPRED_DOTJOIN_SUBSTRATE_CSV = textwrap.dedent("""\
     Protein Sequence,Substrate
     MAAAALRLSEAGHTVACHDESFKQKDELEAFAETYPQLKPMSEQEPAELIEAVTSAYGQVDVLVSNDIFAPEFQPIDKYAVEDYRGAVEALQIRPFALVNAVASQMKKRKSGHIIFITSATPFGPWKELSTYTSARAGACTLANALSKELGEYNIPVFAIGPNYLHSEDSPYFYPTEPWKTNPEHVAHVKKVTALQRLGTQKELGELVAFLASGSCDYLTGQVFWLAGGFPMIERWPGMPE,CC(=O)O.O
@@ -184,6 +186,29 @@ def submit(
         targets = ["kcat/Km"]
         if kcat_km_method:
             methods["kcat/Km"] = kcat_km_method
+    return submit_targets(
+        base,
+        headers,
+        csv_content,
+        targets,
+        methods,
+        handle_long=handle_long,
+        use_experimental=use_experimental,
+        include_similarity_columns=include_similarity_columns,
+    )
+
+
+def submit_targets(
+    base: str,
+    headers: dict,
+    csv_content: str,
+    targets: list[str],
+    methods: dict[str, str],
+    handle_long: str = "truncate",
+    use_experimental: str = "false",
+    include_similarity_columns: bool | None = None,
+) -> requests.Response:
+    """Submit an arbitrary supported target combination."""
     data = {
         "targets": json.dumps(targets),
         "methods": json.dumps(methods),
@@ -210,16 +235,13 @@ def choose_submit_csv(
     Choose the CSV fixture that matches method-specific input expectations.
 
     - TurNup (kcat) uses full-reaction CSV.
-    - CatPred tests use dot-joined values in the single "Substrate" column.
+    - CatPred kcat compatibility tests use dot-joined values in "Substrate".
     - Other methods use the standard single-substrate fixture.
     """
     if prediction_type == "kcat":
         if kcat_method == "TurNup":
             return FULL_REACTION_CSV
         if kcat_method == "CatPred":
-            return CATPRED_DOTJOIN_SUBSTRATE_CSV
-    elif prediction_type == "Km":
-        if km_method == "CatPred":
             return CATPRED_DOTJOIN_SUBSTRATE_CSV
     return SINGLE_SUBSTRATE_CSV
 
@@ -338,6 +360,34 @@ def test_methods(base: str, methods: set) -> None:
         bool(pair_entries)
         and all("substrate_list" in method.get("acceptedCsvTypes", []) for method in pair_entries),
     )
+    check(
+        "methods publish target-specific input metadata",
+        bool(all_method_entries)
+        and all(isinstance(method.get("acceptedCsvTypesByTarget"), dict) for method in all_method_entries)
+        and all(isinstance(method.get("inputBehaviorByTarget"), dict) for method in all_method_entries),
+    )
+    catpred_kcat = next(
+        (method for method in j.get("methods", {}).get("kcat", []) if method.get("id") == "CatPred"),
+        None,
+    )
+    catpred_km = next(
+        (method for method in j.get("methods", {}).get("Km", []) if method.get("id") == "CatPred"),
+        None,
+    )
+    if catpred_kcat and catpred_km:
+        check(
+            "CatPred kcat is native multi-substrate",
+            catpred_kcat.get("inputBehaviorByTarget", {}).get("kcat") == "native_multi",
+        )
+        check(
+            "CatPred Km is expanded per substrate",
+            catpred_km.get("inputBehaviorByTarget", {}).get("Km") == "expanded_pair",
+        )
+        check(
+            "legacy dot CSV is CatPred-kcat-only",
+            "multi" in catpred_kcat.get("acceptedCsvTypesByTarget", {}).get("kcat", [])
+            and "multi" not in catpred_km.get("acceptedCsvTypesByTarget", {}).get("Km", []),
+        )
     turnup_entries = [method for method in all_method_entries if method.get("id") == "TurNup"]
     if turnup_entries:
         check(
@@ -358,6 +408,8 @@ def test_methods(base: str, methods: set) -> None:
         check("KinForm-L in kcat", "KinForm-L" in kcat_ids)
     if sel(methods, "CatPred"):
         check("CatPred in kcat methods", "CatPred" in kcat_ids)
+    if sel(methods, "RealKcat"):
+        check("RealKcat in kcat methods", "RealKcat" in kcat_ids)
     km_ids = {m["id"] for m in j.get("methods", {}).get("Km", [])}
     if sel(methods, "EITLEM"):
         check("EITLEM in Km methods", "EITLEM" in km_ids)
@@ -367,9 +419,13 @@ def test_methods(base: str, methods: set) -> None:
         check("KinForm-H in Km methods", "KinForm-H" in km_ids)
     if sel(methods, "CatPred"):
         check("CatPred in Km methods", "CatPred" in km_ids)
+    if sel(methods, "RealKcat"):
+        check("RealKcat in Km methods", "RealKcat" in km_ids)
     ratio_ids = {m["id"] for m in j.get("methods", {}).get("kcat/Km", [])}
     if sel(methods, "CataPro"):
         check("CataPro in kcat/Km methods", "CataPro" in ratio_ids)
+    if sel(methods, "IECata"):
+        check("IECata in kcat/Km methods", "IECata" in ratio_ids)
     check("has longSequenceOptions", "longSequenceOptions" in j)
 
 
@@ -668,6 +724,23 @@ def test_submit_errors(base: str, headers: dict) -> None:
     r = submit(base, headers, SINGLE_SUBSTRATE_CSV, "kcat", kcat_method="TurNup")
     check("TurNup+wrong CSV → 400", r.status_code == 400, f"got {r.status_code}")
 
+    # CatPred kcat now uses the semicolon Substrates schema; scalar Substrate
+    # is not advertised, while legacy dot-joined Substrate remains supported.
+    r = submit(base, headers, SINGLE_SUBSTRATE_CSV, "kcat", kcat_method="CatPred")
+    check("CatPred kcat+scalar Substrate → 400", r.status_code == 400, f"got {r.status_code}")
+
+    # Dot-joined input is compatibility-only for CatPred kcat. Expanded pair
+    # methods must use semicolon-separated Substrates to get max/array behavior.
+    r = submit(base, headers, CATPRED_DOTJOIN_SUBSTRATE_CSV, "kcat", kcat_method="DLKcat")
+    check("pair method+legacy dot CSV → 400", r.status_code == 400, f"got {r.status_code}")
+
+    invalid_product_csv = (
+        "Protein Sequence,Substrates,Products\n"
+        f"{_multi_substrate_test_sequence()},CCO;O,CC=O;not-a-molecule\n"
+    )
+    r = submit(base, headers, invalid_product_csv, "kcat", kcat_method="DLKcat")
+    check("pair method+invalid Products → 400", r.status_code == 400, f"got {r.status_code}")
+
     # JSON body with empty data array
     r = requests.post(
         f"{base}/submit/",
@@ -938,6 +1011,24 @@ def test_validate(base: str, headers: dict) -> None:
             len(r.json().get("invalidSubstrates", [1])) == 0,
         )
 
+    invalid_product_csv = (
+        "Protein Sequence,Substrates,Products\n"
+        f"{_multi_substrate_test_sequence()},CCO;O,CC=O;not-a-molecule\n"
+    )
+    r = requests.post(
+        f"{base}/validate/",
+        headers=headers,
+        files={"file": csv_file(invalid_product_csv)},
+        data={"runSimilarity": "false"},
+    )
+    if check("full reaction with invalid product → 200", r.status_code == 200):
+        invalid = r.json().get("invalidSubstrates", [])
+        check(
+            "invalid product is validated and reported",
+            bool(invalid)
+            and invalid[0].get("invalid_products", [{}])[0].get("position") == 2,
+        )
+
     # ── Invalid content — one valid row + one invalid row ────────────────────
     r = requests.post(
         f"{base}/validate/",
@@ -1197,6 +1288,366 @@ def test_gpu_methods(base: str, headers: dict, methods: set, poll_timeout: int) 
             validate_completed_result(base, headers, job_id, label, submitted)
 
 
+# ---------------------------------------------------------------------------
+# Opt-in multi-substrate value verification
+# ---------------------------------------------------------------------------
+
+
+def _multi_substrate_test_sequence() -> str:
+    return SINGLE_SUBSTRATE_CSV.strip().splitlines()[1].rsplit(",", 1)[0]
+
+
+def _multi_substrate_test_csv(kind: str) -> str:
+    sequence = _multi_substrate_test_sequence()
+    if kind == "single":
+        return (
+            "Protein Sequence,Substrate\n"
+            f"{sequence},CCO\n"
+            f"{sequence},C1CCCCC1\n"
+        )
+    if kind == "multi":
+        return "Protein Sequence,Substrates\n" f"{sequence},CCO;C1CCCCC1\n"
+    if kind == "full":
+        return (
+            "Protein Sequence,Substrates,Products\n"
+            f"{sequence},CCO;C1CCCCC1,CC=O;O\n"
+        )
+    if kind == "legacy_catpred":
+        return "Protein Sequence,Substrate\n" f"{sequence},CCO.C1CCCCC1\n"
+    raise ValueError(f"Unknown comparison CSV kind: {kind}")
+
+
+def _fetch_method_metadata(base: str) -> dict[str, dict]:
+    response = requests.get(f"{base}/methods/")
+    if not check("[multi-sub] methods metadata HTTP 200", response.status_code == 200):
+        return {}
+    flat: dict[str, dict] = {}
+    for entries in response.json().get("methods", {}).values():
+        for entry in entries:
+            flat[entry["id"]] = entry
+    return flat
+
+
+def _submit_wait_json_result(
+    base: str,
+    headers: dict,
+    *,
+    label: str,
+    csv_content: str,
+    targets: list[str],
+    methods: dict[str, str],
+    poll_timeout: int,
+) -> dict | None:
+    response = submit_targets(
+        base,
+        headers,
+        csv_content,
+        targets,
+        methods,
+        include_similarity_columns=False,
+    )
+    if not check(f"[{label}] submit 201", response.status_code == 201, f"got {response.status_code}"):
+        return None
+    job_id = response.json().get("jobId")
+    if not check(f"[{label}] has jobId", bool(job_id)):
+        return None
+    final_status = wait_for_terminal_status(base, headers, job_id, label, poll_timeout)
+    if not check(f"[{label}] completed", final_status == "Completed", f"got {final_status}"):
+        return None
+    result_response = requests.get(f"{base}/result/{job_id}/?format=json", headers=headers)
+    if not check(
+        f"[{label}] result JSON 200",
+        result_response.status_code == 200,
+        f"got {result_response.status_code}",
+    ):
+        return None
+    return result_response.json()
+
+
+def _prediction_column(result: dict, target: str) -> str | None:
+    columns = result.get("columns", [])
+    source_column = f"Source {target}"
+    try:
+        source_position = columns.index(source_column)
+    except ValueError:
+        return None
+    return columns[source_position - 1] if source_position > 0 else None
+
+
+def _finite_api_number(value) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _json_cell_array(value) -> list | None:
+    if isinstance(value, list):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, list) else None
+
+
+def _numbers_match(left, right, *, rel_tol: float = 1e-7, abs_tol: float = 1e-12) -> bool:
+    left_number = _finite_api_number(left)
+    right_number = _finite_api_number(right)
+    if left_number is None or right_number is None:
+        return left_number is right_number
+    return math.isclose(left_number, right_number, rel_tol=rel_tol, abs_tol=abs_tol)
+
+
+def _assert_preserved_reaction_input(label: str, result: dict, *, full: bool) -> None:
+    data = result.get("data", [])
+    check(f"[{label}] one output row", result.get("rowCount") == 1 and len(data) == 1)
+    if not data:
+        return
+    row = data[0]
+    check(f"[{label}] Substrates preserved", row.get("Substrates") == "CCO;C1CCCCC1")
+    if full:
+        check(f"[{label}] Products preserved", row.get("Products") == "CC=O;O")
+
+
+def _compare_expanded_target(
+    *,
+    label: str,
+    target: str,
+    control: dict,
+    multi: dict,
+    full: dict,
+) -> None:
+    control_column = _prediction_column(control, target)
+    aggregate_column = _prediction_column(multi, target)
+    full_column = _prediction_column(full, target)
+    if not check(
+        f"[{label}] {target} prediction columns found",
+        bool(control_column and aggregate_column and full_column),
+    ):
+        return
+
+    control_rows = control.get("data", [])
+    multi_rows = multi.get("data", [])
+    full_rows = full.get("data", [])
+    if not check(
+        f"[{label}] comparison rows present",
+        len(control_rows) == 2 and len(multi_rows) == 1 and len(full_rows) == 1,
+    ):
+        return
+
+    controls = [_finite_api_number(row.get(control_column)) for row in control_rows]
+    aggregate_value = multi_rows[0].get(aggregate_column)
+    full_value = full_rows[0].get(full_column)
+
+    if target == "kcat":
+        successful = [(index, value) for index, value in enumerate(controls) if value is not None]
+        if not check(f"[{label}] kcat control has a successful prediction", bool(successful)):
+            return
+        winner_index, expected = max(successful, key=lambda item: item[1])
+        check(f"[{label}] kcat equals control maximum", _numbers_match(aggregate_value, expected))
+        check(f"[{label}] full kcat equals multi kcat", _numbers_match(full_value, aggregate_value))
+
+        source_column = f"Source {target}"
+        check(
+            f"[{label}] winning source propagated",
+            multi_rows[0].get(source_column) == control_rows[winner_index].get(source_column),
+        )
+        extra_items = _json_cell_array(multi_rows[0].get(f"Extra Info {target}"))
+        if check(f"[{label}] kcat Extra Info is an ordered array", isinstance(extra_items, list)):
+            check(f"[{label}] kcat Extra Info has both substrates", len(extra_items) == 2)
+            selected = [index for index, item in enumerate(extra_items) if item.get("selected")]
+            check(f"[{label}] kcat marks the earliest maximum", selected == [winner_index])
+            check(
+                f"[{label}] kcat Extra Info preserves substrate order",
+                [item.get("substrate") for item in extra_items] == ["CCO", "C1CCCCC1"],
+            )
+            check(
+                f"[{label}] kcat Extra Info values match scalar controls",
+                len(extra_items) == len(controls)
+                and all(
+                    _numbers_match(item.get("prediction"), controls[index])
+                    for index, item in enumerate(extra_items)
+                ),
+            )
+        return
+
+    aggregate_array = _json_cell_array(aggregate_value)
+    full_array = _json_cell_array(full_value)
+    if not check(f"[{label}] {target} is a JSON array", isinstance(aggregate_array, list)):
+        return
+    check(f"[{label}] {target} array length/order", len(aggregate_array) == 2)
+    check(
+        f"[{label}] {target} values match scalar controls",
+        len(aggregate_array) == len(controls)
+        and all(_numbers_match(value, controls[index]) for index, value in enumerate(aggregate_array)),
+    )
+    check(
+        f"[{label}] full {target} equals multi {target}",
+        isinstance(full_array, list)
+        and len(full_array) == len(aggregate_array)
+        and all(_numbers_match(value, aggregate_array[index]) for index, value in enumerate(full_array)),
+    )
+    extra_items = _json_cell_array(multi_rows[0].get(f"Extra Info {target}"))
+    check(
+        f"[{label}] {target} Extra Info preserves substrate order",
+        isinstance(extra_items, list)
+        and [item.get("substrate") for item in extra_items] == ["CCO", "C1CCCCC1"],
+    )
+
+
+def _test_catpred_native_multi(
+    base: str,
+    headers: dict,
+    metadata: dict[str, dict],
+    methods: set,
+    poll_timeout: int,
+) -> None:
+    if "catpred" not in methods or "CatPred" not in metadata:
+        return
+
+    label = "multi-sub/CatPred-native"
+    km_control = _submit_wait_json_result(
+        base,
+        headers,
+        label=f"{label}/Km-control",
+        csv_content=_multi_substrate_test_csv("single"),
+        targets=["Km"],
+        methods={"Km": "CatPred"},
+        poll_timeout=poll_timeout,
+    )
+    legacy = _submit_wait_json_result(
+        base,
+        headers,
+        label=f"{label}/legacy-dot",
+        csv_content=_multi_substrate_test_csv("legacy_catpred"),
+        targets=["kcat"],
+        methods={"kcat": "CatPred"},
+        poll_timeout=poll_timeout,
+    )
+    combined_methods = {"kcat": "CatPred", "Km": "CatPred"}
+    multi = _submit_wait_json_result(
+        base,
+        headers,
+        label=f"{label}/semicolon",
+        csv_content=_multi_substrate_test_csv("multi"),
+        targets=["kcat", "Km"],
+        methods=combined_methods,
+        poll_timeout=poll_timeout,
+    )
+    full = _submit_wait_json_result(
+        base,
+        headers,
+        label=f"{label}/full",
+        csv_content=_multi_substrate_test_csv("full"),
+        targets=["kcat", "Km"],
+        methods=combined_methods,
+        poll_timeout=poll_timeout,
+    )
+    if not all((km_control, legacy, multi, full)):
+        return
+
+    _assert_preserved_reaction_input(f"{label}/semicolon", multi, full=False)
+    _assert_preserved_reaction_input(f"{label}/full", full, full=True)
+
+    legacy_column = _prediction_column(legacy, "kcat")
+    multi_column = _prediction_column(multi, "kcat")
+    full_column = _prediction_column(full, "kcat")
+    legacy_value = legacy["data"][0].get(legacy_column) if legacy_column else None
+    multi_value = multi["data"][0].get(multi_column) if multi_column else None
+    full_value = full["data"][0].get(full_column) if full_column else None
+    check(f"[{label}] semicolon kcat equals legacy dot kcat", _numbers_match(multi_value, legacy_value))
+    check(f"[{label}] full kcat equals semicolon kcat", _numbers_match(full_value, multi_value))
+    check(
+        f"[{label}] native kcat has no child-reduction Extra Info",
+        multi["data"][0].get("Extra Info kcat") in (None, ""),
+    )
+
+    _compare_expanded_target(
+        label=f"{label}/Km",
+        target="Km",
+        control=km_control,
+        multi=multi,
+        full=full,
+    )
+
+
+def test_multi_sub_for_single_sub_methods(
+    base: str,
+    headers: dict,
+    methods: set,
+    poll_timeout: int,
+) -> None:
+    """Compare expanded multi/full outputs against real scalar controls."""
+    section("Multi-Substrate expansion — value-level verification")
+    metadata = _fetch_method_metadata(base)
+    if not metadata:
+        return
+
+    target_order = ["kcat", "Km", "kcat/Km"]
+    for method_key, method_meta in sorted(metadata.items()):
+        if method_key.lower() not in methods or method_key in {"CatPred", "TurNup"}:
+            continue
+        behaviors = method_meta.get("inputBehaviorByTarget", {})
+        targets = [
+            target
+            for target in target_order
+            if target in method_meta.get("supports", [])
+            and behaviors.get(target, "expanded_pair") == "expanded_pair"
+        ]
+        if not targets:
+            continue
+
+        selected_methods = {target: method_key for target in targets}
+        label = f"multi-sub/{method_key}/{'-'.join(targets)}"
+        control = _submit_wait_json_result(
+            base,
+            headers,
+            label=f"{label}/control",
+            csv_content=_multi_substrate_test_csv("single"),
+            targets=targets,
+            methods=selected_methods,
+            poll_timeout=poll_timeout,
+        )
+        multi = _submit_wait_json_result(
+            base,
+            headers,
+            label=f"{label}/multi",
+            csv_content=_multi_substrate_test_csv("multi"),
+            targets=targets,
+            methods=selected_methods,
+            poll_timeout=poll_timeout,
+        )
+        full = _submit_wait_json_result(
+            base,
+            headers,
+            label=f"{label}/full",
+            csv_content=_multi_substrate_test_csv("full"),
+            targets=targets,
+            methods=selected_methods,
+            poll_timeout=poll_timeout,
+        )
+        if not all((control, multi, full)):
+            continue
+        _assert_preserved_reaction_input(f"{label}/multi", multi, full=False)
+        _assert_preserved_reaction_input(f"{label}/full", full, full=True)
+        for target in targets:
+            _compare_expanded_target(
+                label=label,
+                target=target,
+                control=control,
+                multi=multi,
+                full=full,
+            )
+
+    _test_catpred_native_multi(base, headers, metadata, methods, poll_timeout)
+
+
 def test_wrong_methods(base: str, headers: dict) -> None:
     """Make sure method-not-allowed cases are handled (submit must be POST)."""
     section("HTTP method errors")
@@ -1242,6 +1693,14 @@ def main():
         ),
     )
     parser.add_argument(
+        "--test-multi-sub-for-single-sub-methods",
+        action="store_true",
+        help=(
+            "Run slow value-level multi-substrate tests for every selected pair method. "
+            "Compares scalar controls with semicolon-list and full-reaction outputs."
+        ),
+    )
+    parser.add_argument(
         "--skip-gpu",
         action="store_true",
         help=(
@@ -1283,6 +1742,10 @@ def main():
     print(f"  API Key  : {key[:15]}…")
     print(f"  Methods  : {', '.join(sorted(methods))}")
     print(f"  Variants : {'extra' if args.extra_submit_variants else 'minimal'}")
+    print(
+        "  Multi-sub: "
+        + ("value verification enabled" if args.test_multi_sub_for_single_sub_methods else "skip")
+    )
     print(f"  GPU tests: {'skip' if args.skip_gpu else 'auto (runs if GPU online)'}")
     print("=" * 70)
 
@@ -1318,6 +1781,19 @@ def main():
 
     # Result endpoint (poll every submitted method job until done, then download)
     test_result_completed(base, headers, submitted_jobs, poll_timeout=args.poll_timeout)
+
+    if args.test_multi_sub_for_single_sub_methods:
+        test_multi_sub_for_single_sub_methods(
+            base,
+            headers,
+            methods,
+            poll_timeout=args.poll_timeout,
+        )
+    else:
+        print(
+            "\n  (skipping multi-substrate value tests — pass "
+            "--test-multi-sub-for-single-sub-methods to run them)"
+        )
 
     # Validate endpoint — fast checks (no similarity)
     test_validate(base, headers)

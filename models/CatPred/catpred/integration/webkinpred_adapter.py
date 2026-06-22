@@ -12,7 +12,6 @@ import tempfile
 from typing import Any
 
 import pandas as pd
-from rdkit import Chem, rdBase
 import torch
 
 _THIS_FILE = Path(__file__).resolve()
@@ -38,6 +37,7 @@ sys.path.insert(0, _CATPRED_ROOT_STR)
 sys.path.insert(0, _REPO_ROOT_STR)
 
 from catpred.inference import PredictionRequest, run_prediction_pipeline
+from catpred.integration.substrate_normalization import normalize_catpred_substrates
 from tools.gpu_embed_service.cache_io import SpoolAsyncCommitter, resolve_missing_ids
 
 _VALID_AAS = set("ACDEFGHIKLMNPQRSTVWY")
@@ -320,13 +320,13 @@ def _prepare_seq_pooled_cache(
 
 
 def _build_input_dataframe(rows: list[dict[str, Any]], seq_ids: list[str]) -> pd.DataFrame:
+    if len(rows) != len(seq_ids):
+        raise RuntimeError(
+            f"CatPred received {len(rows)} substrate row(s) for {len(seq_ids)} sequence id(s)."
+        )
     formatted_rows = []
     for row, seq_id in zip(rows, seq_ids):
         substrate = row.get("substrates", row.get("substrate", row.get("Substrate", "")))
-        if isinstance(substrate, list):
-            if len(substrate) != 1:
-                raise RuntimeError("CatPred expects exactly one substrate per row.")
-            substrate = substrate[0]
         substrate = str(substrate).strip()
         sequence = str(row.get("sequence", "")).strip()
         formatted_rows.append(
@@ -347,6 +347,10 @@ def _write_protein_records(
     checkpoint_dir: Path,
     out_path: Path,
 ) -> None:
+    if len(rows) != len(seq_ids):
+        raise RuntimeError(
+            f"CatPred received {len(rows)} protein row(s) for {len(seq_ids)} sequence id(s)."
+        )
     records: dict[str, dict[str, Any]] = {}
     pooled_cache_paths = _prepare_seq_pooled_cache(
         rows=rows,
@@ -372,25 +376,18 @@ def _write_protein_records(
 
 def _row_smiles(row: dict[str, Any]) -> str:
     substrate = row.get("substrates", row.get("substrate", row.get("Substrate", "")))
-    if isinstance(substrate, list):
-        substrate = substrate[0] if len(substrate) == 1 else ""
     return str(substrate).strip()
 
 
-def _catpred_invalid_reason(sequence: str, substrate: str) -> str | None:
+def _catpred_invalid_reason(sequence: str, substrate: Any) -> str | None:
     if not sequence:
         return "Missing protein sequence"
     if not set(sequence).issubset(_VALID_AAS):
         return "Invalid protein sequence (unsupported amino acid characters)"
-    if not substrate:
-        return "Missing substrate"
-
-    with rdBase.BlockLogs():
-        mol = Chem.MolFromSmiles(substrate)
-    if mol is None:
-        return "Invalid substrate (not a valid SMILES)"
-    if mol.GetNumHeavyAtoms() == 0:
-        return f"Unsupported substrate for CatPred: {substrate} contains no heavy atoms"
+    try:
+        normalize_catpred_substrates(substrate)
+    except ValueError as exc:
+        return str(exc)
     return None
 
 
@@ -462,21 +459,31 @@ def run_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(rows, list):
         raise RuntimeError("'rows' must be a list in input payload.")
 
+    params = payload.get("params") or {}
+    raw_canonicalize = params.get("canonicalize_substrates", True)
+    canonicalize_substrates = (
+        raw_canonicalize
+        if isinstance(raw_canonicalize, bool)
+        else str(raw_canonicalize).strip().lower() not in {"0", "false", "no", "off"}
+    )
+
     valid_rows: list[dict[str, Any]] = []
     invalid_indices: list[int] = []
     invalid_reasons: dict[int, str] = {}
     for idx, row in enumerate(rows):
         sequence = str(row.get("sequence", "")).strip()
         substrate = row.get("substrates", row.get("substrate", row.get("Substrate", "")))
-        if isinstance(substrate, list):
-            substrate = substrate[0] if len(substrate) == 1 else ""
-        substrate = str(substrate).strip()
         invalid_reason = _catpred_invalid_reason(sequence, substrate)
         if invalid_reason:
             invalid_indices.append(idx)
             invalid_reasons[idx] = invalid_reason
             continue
-        valid_rows.append(row)
+        normalized_row = dict(row)
+        normalized_row["substrates"] = normalize_catpred_substrates(
+            substrate,
+            canonicalize=canonicalize_substrates,
+        )
+        valid_rows.append(normalized_row)
 
     predictions: list[float | None] = [None] * len(rows)
     if not valid_rows:

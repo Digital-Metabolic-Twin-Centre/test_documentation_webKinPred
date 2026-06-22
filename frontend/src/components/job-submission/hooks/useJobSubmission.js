@@ -82,14 +82,18 @@ export default function useJobSubmission() {
     [orderedTargets, targetMethods]
   );
 
-  // Accepted schemas are published by the backend. Pair-based methods support
-  // ordered Substrates lists; full-reaction methods still require Products.
+  // Accepted schemas are target-specific: CatPred kcat consumes lists natively,
+  // ordinary pair methods expand them, and TurNup requires Products.
   const allowedMethodsByTarget = useMemo(() => {
     const out = { kcat: [], Km: [], 'kcat/Km': [] };
     if (!methods || !csvFormatInfo?.csv_type) return out;
 
     const csvType = csvFormatInfo.csv_type;
-    const canUseMethod = (methodMeta) => {
+    const canUseMethod = (methodMeta, target) => {
+      const targetTypes = methodMeta.acceptedCsvTypesByTarget?.[target];
+      if (Array.isArray(targetTypes)) {
+        return targetTypes.includes(csvType);
+      }
       if (Array.isArray(methodMeta.acceptedCsvTypes)) {
         return methodMeta.acceptedCsvTypes.includes(csvType);
       }
@@ -100,7 +104,7 @@ export default function useJobSubmission() {
 
     for (const target of TARGET_ORDER) {
       out[target] = Object.entries(methods)
-        .filter(([, meta]) => meta.supports.includes(target) && canUseMethod(meta))
+        .filter(([, meta]) => meta.supports.includes(target) && canUseMethod(meta, target))
         .map(([key]) => key);
     }
     return out;

@@ -35,6 +35,31 @@ export default function MethodPicker({
   const visibleTargets = TARGET_ORDER.filter((target) => selectedTargets.includes(target));
 
   const methodLabel = (key) => methods?.[key]?.displayName ?? key;
+  const isListFormat = ['substrate_list', 'full_reaction'].includes(csvFormatInfo?.csv_type);
+
+  const methodBehavior = (key, target) => (
+    methods?.[key]?.inputBehaviorByTarget?.[target] || 'expanded_pair'
+  );
+
+  const optionLabel = (key, target) => {
+    const label = methodLabel(key);
+    if (!isListFormat) return label;
+    const behavior = methodBehavior(key, target);
+    if (behavior === 'native_full_reaction') return `${label} — native full reaction`;
+    if (behavior === 'native_multi') return `${label} — native multi-substrate`;
+    return target === 'kcat'
+      ? `${label} — per-substrate maximum`
+      : `${label} — per-substrate array`;
+  };
+
+  const groupedMethods = (target) => {
+    const keys = allowedMethodsByTarget[target] || [];
+    if (!isListFormat) return { native: [], expanded: keys };
+    return {
+      native: keys.filter((key) => methodBehavior(key, target) !== 'expanded_pair'),
+      expanded: keys.filter((key) => methodBehavior(key, target) === 'expanded_pair'),
+    };
+  };
 
   return (
     <Card className="section-container section-method-selection mb-4">
@@ -59,11 +84,20 @@ export default function MethodPicker({
                     aria-label={`Method for ${TARGET_LABELS[target]}`}
                   >
                     <option value="">Select method...</option>
-                    {(allowedMethodsByTarget[target] || []).map((key) => (
-                      <option key={key} value={key}>
-                        {methodLabel(key)}
-                      </option>
-                    ))}
+                    {groupedMethods(target).native.length > 0 && (
+                      <optgroup label="Native multi/full-reaction methods">
+                        {groupedMethods(target).native.map((key) => (
+                          <option key={key} value={key}>{optionLabel(key, target)}</option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {groupedMethods(target).expanded.length > 0 && (
+                      <optgroup label={isListFormat ? 'Single-substrate methods applied per substrate' : 'Methods'}>
+                        {groupedMethods(target).expanded.map((key) => (
+                          <option key={key} value={key}>{optionLabel(key, target)}</option>
+                        ))}
+                      </optgroup>
+                    )}
                   </Form.Select>
                 </div>
               </Form.Group>

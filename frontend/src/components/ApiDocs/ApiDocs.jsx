@@ -453,28 +453,37 @@ export default function ApiDocs() {
               <TabbedCode tabs={METHODS_REQ} />
               <p className="example-section-label">Response</p>
               <CodeBlock language="json" code={`{
-  "methods": [
-    {
-      "id": "DLKcat",
-      "predicts": ["kcat"],
-      "requiredColumns": ["Protein Sequence", "Substrate"],
-      "acceptedCsvTypes": ["single", "multi", "substrate_list", "full_reaction"],
-      "maxSequenceLength": null
-    },
-    {
-      "id": "RealKcat",
-      "predicts": ["kcat", "Km"],
-      "requiredColumns": ["Protein Sequence", "Substrate"],
-      "maxSequenceLength": 1022
-    },
-    {
-      "id": "IECata",
-      "predicts": ["kcat/Km"],
-      "requiredColumns": ["Protein Sequence", "Substrate"],
-      "maxSequenceLength": 1000
-    },
-    ...
-  ]
+  "methods": {
+    "kcat": [
+      {
+        "id": "DLKcat",
+        "supports": ["kcat"],
+        "inputFormat": "single",
+        "requiredColumns": ["Protein Sequence", "Substrate"],
+        "acceptedCsvTypes": ["single", "substrate_list", "full_reaction"],
+        "acceptedCsvTypesByTarget": {
+          "kcat": ["single", "substrate_list", "full_reaction"]
+        },
+        "inputBehaviorByTarget": {"kcat": "expanded_pair"},
+        "maxSeqLen": null
+      },
+      {
+        "id": "CatPred",
+        "supports": ["kcat", "Km"],
+        "acceptedCsvTypesByTarget": {
+          "kcat": ["multi", "substrate_list", "full_reaction"],
+          "Km": ["single", "substrate_list", "full_reaction"]
+        },
+        "inputBehaviorByTarget": {
+          "kcat": "native_multi",
+          "Km": "expanded_pair"
+        }
+      }
+    ],
+    "Km": ["..."],
+    "kcat/Km": ["..."]
+  },
+  "predictionTypes": ["kcat", "Km", "kcat/Km"]
 }`} />
             </EndpointCard>
 
@@ -811,9 +820,10 @@ export default function ApiDocs() {
         <section className="api-docs-section">
           <h2>CSV Format Reference</h2>
           <p style={{ marginBottom: '1rem', opacity: 0.85 }}>
-            Pair-based methods accept either one <code>Substrate</code> or an ordered,
-            semicolon-separated <code>Substrates</code> list. TurNup requires a full reaction
-            with <code>Products</code>.
+            Single-substrate methods accept either one <code>Substrate</code> or an ordered,
+            semicolon-separated <code>Substrates</code> list. CatPred kcat consumes the complete
+            substrate set natively. TurNup requires a full reaction with <code>Products</code>.
+            Other methods accept full-reaction files but ignore and preserve the products.
           </p>
           <div className="api-callout api-callout-info" style={{ marginBottom: '1rem' }}>
             <strong>Handling long protein sequences:</strong> Set <code>handleLongSequences</code> in
@@ -883,7 +893,7 @@ export default function ApiDocs() {
               <tr>
                 <td><code>CatPred</code></td>
                 <td>kcat or Km</td>
-                <td><code>Protein Sequence</code>, <code>Substrate</code></td>
+                <td>kcat: <code>Protein Sequence</code>, <code>Substrates</code>; Km also accepts <code>Substrate</code></td>
                 <td>2,048 residues</td>
               </tr>
               <tr>
@@ -917,9 +927,13 @@ export default function ApiDocs() {
             <strong>Substrate format:</strong> Use SMILES strings (e.g.{' '}
             <code>CC(=O)O</code> for acetic acid) or InChI strings. Single inputs use
             one value in <code>Substrate</code>. Ordered lists use semicolons in{' '}
-            <code>Substrates</code>, e.g. <code>CC(=O)O;C1CCCCC1</code>. Pair methods
+            <code>Substrates</code>, e.g. <code>CC(=O)O;C1CCCCC1</code>. Single-substrate methods
             return the maximum kcat and JSON-encoded Km and kcat/Km arrays; failed positions
-            are <code>null</code>. TurNup additionally requires <code>Products</code>.
+            are <code>null</code>. CatPred kcat instead makes one native prediction for the
+            complete substrate set. TurNup uses <code>Products</code>; other methods ignore them.
+            Supplied products are still validated for every submission.
+            Legacy CatPred kcat requests using dot-joined <code>Substrate</code> values remain
+            accepted but are no longer the documented format.
           </div>
         </section>
 

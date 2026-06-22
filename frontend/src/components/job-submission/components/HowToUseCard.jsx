@@ -9,8 +9,8 @@ import '../../../styles/components/HowToUseCard.css';
 const FORMAT_SPECS = [
   {
     key: 'single',
-    name: 'One Substrate',
-    methods: ['All compatible substrate-pair methods'],
+    name: 'Single Substrate',
+    methods: ['CataPro', 'CatPred (Km)', 'DLKcat', 'EITLEM', 'IECata', 'KinForm-H', 'KinForm-L', 'MMISA-KM', 'OmniESI', 'RealKcat', 'UniKP'],
     columns: [
       { col: 'Protein Sequence', desc: 'full amino-acid sequence' },
       { col: 'Substrate',        desc: 'SMILES or InChI — one per row' },
@@ -18,8 +18,8 @@ const FORMAT_SPECS = [
   },
   {
     key: 'multi',
-    name: 'Substrate List',
-    methods: ['All compatible substrate-pair methods', 'kcat max · KM/ratio arrays'],
+    name: 'Multi-Substrate',
+    methods: ['CatPred (kcat)'],
     columns: [
       { col: 'Protein Sequence', desc: 'full amino-acid sequence' },
       { col: 'Substrates',       desc: <span>ordered values joined with <code className="fmt-dot">;</code></span> },
@@ -28,7 +28,7 @@ const FORMAT_SPECS = [
   {
     key: 'full',
     name: 'Full Reaction',
-    methods: ['Products required by TurNup; ignored by pair methods'],
+    methods: ['TurNup (kcat)'],
     columns: [
       { col: 'Protein Sequence', desc: 'full amino-acid sequence' },
       { col: 'Substrates',       desc: 'semicolon-separated SMILES or InChI' },
@@ -194,6 +194,17 @@ export default function HowToUseCard({ methods = {} }) {
           ))}
         </div>
 
+        <Alert variant="warning" className="d-flex align-items-center howto-limit-alert mt-3 mb-0">
+          <ExclamationTriangle size={24} className="me-3 howto-limit-icon" />
+          <div>
+            <strong>Single-substrate methods also accept Multi-Substrate and Full-Reaction files.</strong>{' '}
+            They predict every semicolon-separated substrate independently: k<sub>cat</sub> uses the
+            maximum successful prediction, while K<sub>M</sub> and direct k<sub>cat</sub>/K<sub>M</sub>{' '}
+            return ordered JSON arrays. Products are preserved but ignored by these methods;
+            CatPred k<sub>cat</sub> also accepts Full-Reaction files and keeps its native combined prediction.
+          </div>
+        </Alert>
+
         <hr className="my-4" />
         <h4 className="text-center mb-3">Example Templates</h4>
         <div className="d-grid gap-2 d-md-flex justify-content-md-center">
@@ -212,7 +223,7 @@ export default function HowToUseCard({ methods = {} }) {
             className="btn btn-custom-subtle"
           >
             <BoxArrowInDown className="me-2" />
-            Substrate-List Template
+            Multi-Substrate Template
           </Button>
 
           <Button

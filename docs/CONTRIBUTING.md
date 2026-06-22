@@ -21,6 +21,7 @@ descriptor = MethodDescriptor(
 
     supports=["kcat"],                 # e.g. ["kcat"], ["Km"], ["kcat/Km"], or combinations
     input_format="single",             # backend contract: "single" or "multi"
+    # input_behavior_by_target={"kcat": "native_multi"},  # rare target override
     output_cols={"kcat": "kcat (1/s)"},
     max_seq_len=1024,
 
@@ -44,6 +45,11 @@ descriptor = MethodDescriptor(
   The orchestration layer automatically expands semicolon-separated
   `Substrates` values for every `single` descriptor, so predictor integrations
   should continue declaring only their native one-substrate contract.
+- `input_behavior_by_target`: override the default only when a target consumes
+  list input natively. CatPred declares `native_multi` for kcat and
+  `expanded_pair` for Km; TurNup inherits `native_full_reaction` from its
+  full-reaction descriptor. Keep target-specific behavior here instead of
+  adding method-name branches to orchestration or UI code.
 - `col_to_kwarg`: maps CSV columns to kwargs passed into your method runtime.
 - `target_kwargs`: per-target switches (for shared kcat/Km scripts).
 - `subprocess` or `pred_func`: set exactly one.

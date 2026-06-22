@@ -17,7 +17,7 @@ const hasFile = !!fileName && fileName !== 'No file chosen';
 const csvTypeLabel = csvFormatInfo?.csv_type === 'full_reaction'
   ? 'full-reaction'
   : csvFormatInfo?.csv_type === 'substrate_list'
-    ? 'substrate-list'
+    ? 'multi-substrate'
   : csvFormatInfo?.csv_type === 'multi'
     ? 'multi-substrate'
     : 'single-substrate';

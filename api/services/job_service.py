@@ -30,6 +30,7 @@ from api.utils.quotas import (
 from api.utils.validation_utils import (
     parse_csv_file,
     validate_column_emptiness,
+    validate_products_column,
 )
 
 _log = logging.getLogger(__name__)
@@ -144,6 +145,23 @@ def process_job_submission_from_params(
     sequence_error = validate_column_emptiness(dataframe, "Protein Sequence")
     if sequence_error:
         return JsonResponse({"error": sequence_error}, status=400), None
+
+    product_errors = validate_products_column(dataframe)
+    if product_errors:
+        first = product_errors[0]
+        position = first.get("position")
+        location = f"row {first['row']}"
+        if position is not None:
+            location += f", product {position}"
+        return JsonResponse(
+            {
+                "error": (
+                    f"Invalid Products value at {location}: {first.get('value')!r}. "
+                    "Products must be semicolon-separated SMILES or InChI strings."
+                )
+            },
+            status=400,
+        ), None
 
     # --- Quota -----------------------------------------------------------------
 

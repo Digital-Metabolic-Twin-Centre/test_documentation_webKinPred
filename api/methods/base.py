@@ -15,6 +15,9 @@ from typing import Callable, Literal
 PredictionTarget = Literal["kcat", "Km", "kcat/Km"]
 """A kinetic parameter that a method can predict."""
 
+InputBehavior = Literal["expanded_pair", "native_multi", "native_full_reaction"]
+"""How a method target consumes a user-facing ``Substrates`` input."""
+
 InputFormat = Literal["single", "multi", "full reaction"]
 """
 The user-facing CSV input format.
@@ -25,8 +28,9 @@ The user-facing CSV input format.
 - "full reaction": requires "Substrates" and "Products" columns
                    (semicolon-separated SMILES/InChI per row).
 
-Independently of these legacy labels, the user-facing ``substrate_list`` CSV
-schema supplies ``Substrates`` without ``Products``. The orchestration layer
+Independently of these legacy labels, the internal ``substrate_list`` CSV type
+(shown to users as Multi-Substrate) supplies ``Substrates`` without
+``Products``. The orchestration layer
 expands that schema for every descriptor using the backend ``"single"``
 contract.
 
@@ -188,6 +192,13 @@ class MethodDescriptor:
         co-substrates in ``Substrate``), and ``"full reaction"`` (the
         ``Substrates``/``Products`` backend ``"multi"`` contract).
 
+    input_behavior_by_target : dict[PredictionTarget, InputBehavior]
+        Optional target-level override for user-facing ``Substrates`` input.
+        Single-contract descriptors default to ``expanded_pair`` and
+        full-reaction descriptors default to ``native_full_reaction``.
+        CatPred uses ``native_multi`` for kcat while retaining
+        ``expanded_pair`` for Km.
+
     output_cols : dict[str, str]
         Maps each supported prediction target to the output CSV column name.
         E.g. ``{"kcat": "kcat (1/s)", "Km": "KM (mM)"}``.
@@ -291,6 +302,9 @@ class MethodDescriptor:
     # ── Capabilities ──────────────────────────────────────────────────────────
     supports: list[PredictionTarget] = field(default_factory=list)
     input_format: DescriptorInputFormat = "single"
+    input_behavior_by_target: dict[PredictionTarget, InputBehavior] = field(
+        default_factory=dict
+    )
     output_cols: dict[str, str] = field(default_factory=dict)
 
     # ── Sequence length limit ─────────────────────────────────────────────────
@@ -308,3 +322,22 @@ class MethodDescriptor:
 
     # ── Embedding models used (informational) ─────────────────────────────────
     embeddings_used: list[str] = field(default_factory=list)
+
+    def input_behavior(self, target: PredictionTarget) -> InputBehavior:
+        """Return the target-specific orchestration behavior."""
+        configured = self.input_behavior_by_target.get(target)
+        if configured:
+            return configured
+        if self.input_format == "multi":
+            return "native_full_reaction"
+        return "expanded_pair"
+
+    def accepted_csv_types_for_target(self, target: PredictionTarget) -> list[str]:
+        """Return user-facing CSV schemas accepted for one prediction target."""
+        behavior = self.input_behavior(target)
+        if behavior == "native_full_reaction":
+            return ["full_reaction"]
+        if behavior == "native_multi":
+            # ``multi`` is the compatibility-only, dot-joined CatPred schema.
+            return ["multi", "substrate_list", "full_reaction"]
+        return ["single", "substrate_list", "full_reaction"]

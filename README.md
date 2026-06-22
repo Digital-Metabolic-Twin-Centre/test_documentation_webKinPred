@@ -279,18 +279,24 @@ contains `histogram_max`, `histogram_mean` (10-bin arrays, 0–100% identity),
 
 Supported input schemas are:
 
-- `Protein Sequence, Substrate` for one molecular input (existing dot-joined
-  method-specific inputs remain supported).
+- `Protein Sequence, Substrate` for one molecular input. Legacy dot-joined
+  CatPred kcat inputs remain supported for API compatibility only.
 - `Protein Sequence, Substrates` for an ordered, semicolon-separated list.
 - `Protein Sequence, Substrates, Products` for a full reaction. `Products` is
   required by TurNup and is preserved but ignored by substrate-pair methods.
 
-For a `Substrates` list, pair-based methods predict every protein/substrate
+For a `Substrates` list, single-substrate methods predict every protein/substrate
 pair. The reaction kcat is the maximum successful value; Km and direct kcat/Km
 outputs are JSON arrays in substrate order, with `null` for failed entries.
 The matching `Extra Info <target>` cell contains a JSON array with each
 substrate's one-based position, input value, prediction, source, error, and the
 selected kcat maximum.
+
+CatPred kcat is the exception: it consumes the complete ordered substrate set
+as one native multi-substrate input and returns one scalar. CatPred Km still
+uses the per-substrate array behavior, including when kcat and Km are requested
+together. TurNup consumes both sides of a full reaction; every other method
+preserves but ignores `Products`.
 
 | Method | Predicts | Required columns | Max sequence length |
 | ------ | -------- | ---------------- | ------------------- |
@@ -301,7 +307,7 @@ selected kcat maximum.
 | CataPro | kcat, Km, or kcat/Km | `Protein Sequence`, `Substrate` or `Substrates` | 1,000 residues |
 | KinForm-H | kcat or Km | `Protein Sequence`, `Substrate` or `Substrates` | 1,500 residues |
 | KinForm-L | kcat only | `Protein Sequence`, `Substrate` or `Substrates` | 1,500 residues |
-| CatPred | kcat or Km | `Protein Sequence`, `Substrate` or `Substrates` | 2,048 residues |
+| CatPred | kcat or Km | kcat: `Substrates`; Km: `Substrate` or `Substrates` | 2,048 residues |
 | OmniESI | kcat or Km | `Protein Sequence`, `Substrate` or `Substrates` | 1,000 residues |
 | RealKcat | kcat or Km | `Protein Sequence`, `Substrate` or `Substrates` | 1,022 residues |
 | IECata | kcat/Km | `Protein Sequence`, `Substrate` or `Substrates` | 1,000 residues |
@@ -309,7 +315,8 @@ selected kcat maximum.
 
 Substrates and products must be SMILES or InChI strings. Separate ordered
 values in `Substrates` and `Products` with semicolons, for example
-`CC(=O)O;C1CCCCC1`.
+`CC(=O)O;C1CCCCC1`. Supplied products are validated even when the selected
+method preserves but does not use them.
 
 ---
 

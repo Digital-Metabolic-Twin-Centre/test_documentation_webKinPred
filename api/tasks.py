@@ -519,8 +519,9 @@ def _execute_target_batch(
 ) -> dict[str, Any]:
     """Execute one method/target either natively or as an expanded child batch."""
     n_rows = len(sequences)
+    input_behavior = desc.input_behavior(target)
     if (
-        desc.input_format == "single"
+        input_behavior == "expanded_pair"
         and "Substrate" in desc.col_to_kwarg
         and "Substrates" in df.columns
     ):
@@ -600,6 +601,14 @@ def _execute_target_batch(
             "output_col": desc.output_cols[target],
         }
 
+    native_call_kwargs: dict[str, list[Any]] | None = None
+    if input_behavior == "native_multi" and "Substrates" in df.columns:
+        plan = SubstrateExpansionPlan.build(
+            df["Substrates"].tolist(),
+            valid_reaction_indices,
+        )
+        native_call_kwargs = _build_native_multi_call_kwargs(desc, df, plan)
+
     return _execute_native_target_batch(
         job=job,
         desc=desc,
@@ -612,6 +621,8 @@ def _execute_target_batch(
         canonicalize_substrates=canonicalize_substrates,
         disable_gpu_precompute=disable_gpu_precompute,
         extra_call_kwargs=extra_call_kwargs,
+        call_kwargs_override=native_call_kwargs,
+        apply_experimental_overrides=input_behavior == "expanded_pair",
     )
 
 
@@ -633,6 +644,33 @@ def _build_expanded_call_kwargs(
     return call_kwargs
 
 
+def _build_native_multi_call_kwargs(
+    desc,
+    df: pd.DataFrame,
+    plan: SubstrateExpansionPlan,
+) -> dict[str, list[Any]]:
+    """Build one ordered substrate collection per original reaction row."""
+    call_kwargs: dict[str, list[Any]] = {}
+    for column, kwarg_name in desc.col_to_kwarg.items():
+        if column == "Substrate":
+            grouped_substrates: list[list[str]] = []
+            for _reaction_position, start, end in plan.reaction_slices:
+                grouped_substrates.append(
+                    [plan.children[index].substrate for index in range(start, end)]
+                )
+            call_kwargs[kwarg_name] = grouped_substrates
+            continue
+        if column not in df.columns:
+            raise PredictionError(
+                f"Missing column required for {desc.display_name}: {column}"
+            )
+        call_kwargs[kwarg_name] = [
+            df[column].iloc[reaction_position]
+            for reaction_position in plan.reaction_positions
+        ]
+    return call_kwargs
+
+
 def _execute_native_target_batch(
     *,
     job: Job,
@@ -646,21 +684,24 @@ def _execute_native_target_batch(
     canonicalize_substrates: bool,
     disable_gpu_precompute: bool,
     extra_call_kwargs: dict[str, Any],
+    call_kwargs_override: dict[str, list[Any]] | None = None,
+    apply_experimental_overrides: bool = True,
 ) -> dict[str, Any]:
     n_rows = len(sequences)
     predictions: list[Any] = [""] * n_rows
     sources: list[str] = [""] * n_rows
     extra: list[str] = [""] * n_rows
     failed_reactions: dict[int, str] = {}
-    call_kwargs: dict[str, Any] = {}
-    for column, kwarg_name in desc.col_to_kwarg.items():
-        if column not in df.columns:
-            raise PredictionError(
-                f"Missing column required for {desc.display_name}: {column}"
-            )
-        call_kwargs[kwarg_name] = [
-            df[column].iloc[reaction_index] for reaction_index in valid_reaction_indices
-        ]
+    call_kwargs: dict[str, Any] = dict(call_kwargs_override or {})
+    if call_kwargs_override is None:
+        for column, kwarg_name in desc.col_to_kwarg.items():
+            if column not in df.columns:
+                raise PredictionError(
+                    f"Missing column required for {desc.display_name}: {column}"
+                )
+            call_kwargs[kwarg_name] = [
+                df[column].iloc[reaction_index] for reaction_index in valid_reaction_indices
+            ]
     call_kwargs.update(desc.target_kwargs.get(target, {}))
     call_kwargs.update(extra_call_kwargs)
     processed_sequences = [processed_by_reaction[index] for index in valid_reaction_indices]
@@ -707,17 +748,18 @@ def _execute_native_target_batch(
             predictions_made=0,
         )
 
-    _apply_native_experimental_overrides(
-        job=job,
-        desc=desc,
-        target=target,
-        sequences=sequences,
-        experimental_results=experimental_results,
-        predictions=predictions,
-        sources=sources,
-        extra=extra,
-        failed_reactions=failed_reactions,
-    )
+    if apply_experimental_overrides:
+        _apply_native_experimental_overrides(
+            job=job,
+            desc=desc,
+            target=target,
+            sequences=sequences,
+            experimental_results=experimental_results,
+            predictions=predictions,
+            sources=sources,
+            extra=extra,
+            failed_reactions=failed_reactions,
+        )
     return {
         "preds": predictions,
         "sources": sources,
