@@ -99,11 +99,16 @@ CATPRED_DOTJOIN_SUBSTRATE_CSV = textwrap.dedent("""\
     MCTAITLNGNSNYFGRNLDLDFSYGEEVIITPAEYEFKFRKEKAIKNHKSLIGVGIVANDYPLYFDAINEDGLGMAGLNFPGNAYYSDALENDKDNITPFEFIPWILGQCSDVNEARNLVEKINLINLSFSEQLPLAGLHWLIADREKSIVVEVTKSGVHIYDNPIGILTNNPEFNYQMYNLNKYRNLSISTPQNTFSDSVDLKVDGTGFGGIGLPGDVSPESRFVRATFSKLNSSKGMTVEEDITQFFHILGTVEQIKGVNKTESGKEEYTVYSNCYDLDNKTLYYTTYENRQIVAVTLNKDKDGNRLVTYPFERKQIINKLN,OCC(O)CO.CCO
 """)
 
-# Full-reaction CSV (for TurNup only — uses Substrates + Products columns)
+# Full-reaction CSV (TurNup uses it natively; pair methods expand Substrates)
 FULL_REACTION_CSV = textwrap.dedent("""\
     Protein Sequence,Substrates,Products
     MSTAIVTNVKHFGGMGSALRLSEAGHTVACHDESFKQKDELEAFAETYPQLKPMSEQEPAELIEAVTSAYGQVDVLVSNDIFAPEFQPIDKYAVEDYRGAVEALQIRPFALVNAVASQMKKRKSGHIIFITSATPFGPWKELSTYTSARAGACTLANALSKELGEYNIPVFAIGPNYLHSEDSPYFYPTEPWKTNPEHVAHVKKVTALQRLGTQKELGELVAFLASGSCDYLTGQVFWLAGGFPMIERWPGMPE,CC(=O)O;O,CC(O)=O;[H+]
     MEMLEEHRCFEGWQQRWRHDSSTLNCPMTFSIFLPPPRDHTPPPVLYWLSGLTCNDENFTTKAGAQRVAAELGIVLVMPDTSPRGEKVANDDGYDLGQGAGFYLNATQPPWATHYRMYDYLRDELPALVQSQFNVSDRCAISGHSMGGHGALIMALKNPGKYTSVSAFAPIVNPCSVPWGIKAFSSYLGEDKNAWLEWDSCALMYASNAQDAIPTLIAQGDNDQFLADQLQPAVLAEAARQKAWPMTLRIQPGYDHSYYFIASFIEDHLRFHAQYLLK,C1CCCCC1;O,OC1CCCCC1;[H+]
+""")
+
+SUBSTRATE_LIST_CSV = textwrap.dedent("""\
+    Protein Sequence,Substrates
+    MAAAALRLSEAGHTVACHDESFKQKDELEAFAETYPQLKPMSEQEPAELIEAVTSAYGQVDVLVSNDIFAPEFQPIDKYAVEDYRGAVEALQIRPFALVNAVASQMKKRKSGHIIFITSATPFGPWKELSTYTSARAGACTLANALSKELGEYNIPVFAIGPNYLHSEDSPYFYPTEPWKTNPEHVAHVKKVTALQRLGTQKELGELVAFLASGSCDYLTGQVFWLAGGFPMIERWPGMPE,CC(=O)O;O;C1CCCCC1
 """)
 
 # CSV missing the required "Substrate" column — to test validation errors
@@ -247,9 +252,9 @@ def build_gpu_uncached_csv(label: str) -> str:
     seq_b = _unique_protein_sequence(f"{nonce}:b")
     return textwrap.dedent(
         f"""\
-        Protein Sequence,Substrate,Substrates,Products
-        {seq_a},CC(=O)O,CC(=O)O;O,CC(O)=O;[H+]
-        {seq_b},C1CCCCC1,C1CCCCC1;O,OC1CCCCC1;[H+]
+        Protein Sequence,Substrates,Products
+        {seq_a},CC(=O)O;O,CC(O)=O;[H+]
+        {seq_b},C1CCCCC1;O,OC1CCCCC1;[H+]
     """
     )
 
@@ -322,6 +327,23 @@ def test_methods(base: str, methods: set) -> None:
     check("has methods.Km", isinstance(j.get("methods", {}).get("Km"), list))
     check("has methods.kcat/Km", isinstance(j.get("methods", {}).get("kcat/Km"), list))
     kcat_ids = {m["id"] for m in j.get("methods", {}).get("kcat", [])}
+    all_method_entries = [
+        method
+        for target_methods in j.get("methods", {}).values()
+        for method in target_methods
+    ]
+    pair_entries = [method for method in all_method_entries if method.get("inputFormat") == "single"]
+    check(
+        "pair methods accept substrate_list",
+        bool(pair_entries)
+        and all("substrate_list" in method.get("acceptedCsvTypes", []) for method in pair_entries),
+    )
+    turnup_entries = [method for method in all_method_entries if method.get("id") == "TurNup"]
+    if turnup_entries:
+        check(
+            "TurNup only accepts full_reaction",
+            all(method.get("acceptedCsvTypes") == ["full_reaction"] for method in turnup_entries),
+        )
     if sel(methods, "DLKcat"):
         check("DLKcat in kcat methods", "DLKcat" in kcat_ids)
     if sel(methods, "TurNup"):
@@ -834,9 +856,11 @@ def validate_completed_result(
     if j.get("data"):
         first_row = j["data"][0]
         check(f"[{label}] row has Protein Sequence", "Protein Sequence" in first_row)
-        if "TurNup" in label:
+        submitted_header = str(submitted.get("csv_content", "")).lstrip().splitlines()[0]
+        if "Substrates" in submitted_header:
             check(f"[{label}] row has Substrates", "Substrates" in first_row)
-            check(f"[{label}] row has Products", "Products" in first_row)
+            if "Products" in submitted_header:
+                check(f"[{label}] row has Products", "Products" in first_row)
         else:
             check(f"[{label}] row has Substrate", "Substrate" in first_row)
 
@@ -901,6 +925,18 @@ def test_validate(base: str, headers: dict) -> None:
         check("similarity is null", j.get("similarity") is None)
         check("no invalid substrates", len(j.get("invalidSubstrates", [1])) == 0)
         check("no invalid proteins", len(j.get("invalidProteins", [1])) == 0)
+
+    r = requests.post(
+        f"{base}/validate/",
+        headers=headers,
+        files={"file": csv_file(SUBSTRATE_LIST_CSV)},
+        data={"runSimilarity": "false"},
+    )
+    if check("Substrates list CSV → 200", r.status_code == 200, f"got {r.status_code}"):
+        check(
+            "Substrates list is chemically valid",
+            len(r.json().get("invalidSubstrates", [1])) == 0,
+        )
 
     # ── Invalid content — one valid row + one invalid row ────────────────────
     r = requests.post(

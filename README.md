@@ -277,36 +277,46 @@ contains `histogram_max`, `histogram_mean` (10-bin arrays, 0–100% identity),
 
 ### CSV Format
 
-Supported input schemas are `single`, `multi`, and `full reaction`.
-`single` uses one `Substrate` value per row. `multi` uses the same `Substrate`
-column with co-substrates dot-joined in one cell, for example `CC(=O)O.O`.
-`full reaction` uses separate `Substrates` and `Products` columns.
+Supported input schemas are:
+
+- `Protein Sequence, Substrate` for one molecular input (existing dot-joined
+  method-specific inputs remain supported).
+- `Protein Sequence, Substrates` for an ordered, semicolon-separated list.
+- `Protein Sequence, Substrates, Products` for a full reaction. `Products` is
+  required by TurNup and is preserved but ignored by substrate-pair methods.
+
+For a `Substrates` list, pair-based methods predict every protein/substrate
+pair. The reaction kcat is the maximum successful value; Km and direct kcat/Km
+outputs are JSON arrays in substrate order, with `null` for failed entries.
+The matching `Extra Info <target>` cell contains a JSON array with each
+substrate's one-based position, input value, prediction, source, error, and the
+selected kcat maximum.
 
 | Method | Predicts | Required columns | Max sequence length |
 | ------ | -------- | ---------------- | ------------------- |
-| DLKcat | kcat | `Protein Sequence`, `Substrate` | No limit |
+| DLKcat | kcat | `Protein Sequence`, `Substrate` or `Substrates` | No limit |
 | TurNup | kcat | `Protein Sequence`, `Substrates`, `Products` | 1,024 residues |
-| EITLEM | kcat or Km | `Protein Sequence`, `Substrate` | 1,024 residues |
-| UniKP | kcat or Km | `Protein Sequence`, `Substrate` | 1,000 residues |
-| CataPro | kcat, Km, or kcat/Km | `Protein Sequence`, `Substrate` | 1,000 residues |
-| KinForm-H | kcat or Km | `Protein Sequence`, `Substrate` | 1,500 residues |
-| KinForm-L | kcat only | `Protein Sequence`, `Substrate` | 1,500 residues |
-| CatPred | kcat or Km | `Protein Sequence`, `Substrate` | 2,048 residues |
-| OmniESI | kcat or Km | `Protein Sequence`, `Substrate` | 1,000 residues |
-| RealKcat | kcat or Km | `Protein Sequence`, `Substrate` | 1,022 residues |
-| IECata | kcat/Km | `Protein Sequence`, `Substrate` | 1,000 residues |
-| MMISA-KM | Km | `Protein Sequence`, `Substrate` | 500 residues |
+| EITLEM | kcat or Km | `Protein Sequence`, `Substrate` or `Substrates` | 1,024 residues |
+| UniKP | kcat or Km | `Protein Sequence`, `Substrate` or `Substrates` | 1,000 residues |
+| CataPro | kcat, Km, or kcat/Km | `Protein Sequence`, `Substrate` or `Substrates` | 1,000 residues |
+| KinForm-H | kcat or Km | `Protein Sequence`, `Substrate` or `Substrates` | 1,500 residues |
+| KinForm-L | kcat only | `Protein Sequence`, `Substrate` or `Substrates` | 1,500 residues |
+| CatPred | kcat or Km | `Protein Sequence`, `Substrate` or `Substrates` | 2,048 residues |
+| OmniESI | kcat or Km | `Protein Sequence`, `Substrate` or `Substrates` | 1,000 residues |
+| RealKcat | kcat or Km | `Protein Sequence`, `Substrate` or `Substrates` | 1,022 residues |
+| IECata | kcat/Km | `Protein Sequence`, `Substrate` or `Substrates` | 1,000 residues |
+| MMISA-KM | Km | `Protein Sequence`, `Substrate` or `Substrates` | 500 residues |
 
-Substrates and products must be SMILES or InChI strings. For `multi` inputs,
-dot-join co-substrates in `Substrate`: `CC(=O)O.O`. For `full reaction`
-inputs, separate multiple substrates or products with semicolons in the
-`Substrates` and `Products` columns: `CC(=O)O;C1CCCCC1`.
+Substrates and products must be SMILES or InChI strings. Separate ordered
+values in `Substrates` and `Products` with semicolons, for example
+`CC(=O)O;C1CCCCC1`.
 
 ---
 
 ### Rate Limits
 
-* **20,000 predictions/day** per API key (default; custom limits available).
+* **20,000 input reaction rows/day** per API key (default; custom limits available).
+  Internal per-substrate predictions do not consume additional quota.
 * Counter resets at midnight UTC.
 * Response headers: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`.
 * HTTP `429` is returned when the quota is exceeded.

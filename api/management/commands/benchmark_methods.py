@@ -796,7 +796,6 @@ class Command(BaseCommand):
             rows.append(
                 {
                     "Protein Sequence": proteins[i % n_proteins],
-                    "Substrate": substrate,
                     "Substrates": substrate,
                     "Products": product,
                 }

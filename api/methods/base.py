@@ -25,6 +25,11 @@ The user-facing CSV input format.
 - "full reaction": requires "Substrates" and "Products" columns
                    (semicolon-separated SMILES/InChI per row).
 
+Independently of these legacy labels, the user-facing ``substrate_list`` CSV
+schema supplies ``Substrates`` without ``Products``. The orchestration layer
+expands that schema for every descriptor using the backend ``"single"``
+contract.
+
 Backend descriptors use ``DescriptorInputFormat`` below. In descriptors and
 validation logic, both user-facing "single" and "multi" use the "single"
 column contract. User-facing "full reaction" is represented by the backend
@@ -38,6 +43,11 @@ The backend CSV column contract stored on method descriptors.
 - "single": reads the "Substrate" column.
 - "multi": reads the "Substrates" and "Products" columns, corresponding to
            the user-facing "full reaction" input format.
+
+The orchestration layer can also adapt a user-facing, semicolon-separated
+``Substrates`` column to any ``"single"`` descriptor by expanding it into
+individual protein/substrate pairs. Descriptors continue to declare only their
+native engine contract here.
 """
 
 

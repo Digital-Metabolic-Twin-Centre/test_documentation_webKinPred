@@ -6,6 +6,7 @@ These functions handle specific validation tasks following single responsibility
 import pandas as pd
 from typing import List, Dict, Any, Optional, Tuple
 from api.utils.convert_to_mol import convert_to_mol
+from api.utils.substrate_expansion import split_substrate_list
 
 try:
     from webKinPred.config_docker import SERVER_LIMIT
@@ -85,11 +86,16 @@ def validate_csv_structure(dataframe: pd.DataFrame) -> Optional[str]:
         Error message if validation fails, None if valid
     """
     has_substrate_col = "Substrate" in dataframe.columns
-    has_full_reaction_cols = "Substrates" in dataframe.columns and "Products" in dataframe.columns
+    has_substrates_col = "Substrates" in dataframe.columns
+    has_products_col = "Products" in dataframe.columns
     has_protein_col = "Protein Sequence" in dataframe.columns
 
-    if not (has_substrate_col or has_full_reaction_cols):
-        return 'CSV must contain "Substrate" column OR "Substrates" and "Products" columns'
+    if has_substrate_col and has_substrates_col:
+        return 'CSV cannot contain both "Substrate" and "Substrates" columns'
+    if has_products_col and not has_substrates_col:
+        return 'CSV cannot contain "Products" without a "Substrates" column'
+    if not (has_substrate_col or has_substrates_col):
+        return 'CSV must contain either a "Substrate" or "Substrates" column'
 
     if not has_protein_col:
         return 'CSV must contain a "Protein Sequence" column'
@@ -143,40 +149,60 @@ def validate_single_substrate_schema(dataframe: pd.DataFrame) -> List[Dict[str, 
     return invalid_substrates
 
 
-def validate_full_reaction_schema(dataframe: pd.DataFrame) -> List[Dict[str, Any]]:
+def validate_substrate_list_schema(dataframe: pd.DataFrame) -> List[Dict[str, Any]]:
     """
-    Validate substrates/products using full-reaction schema.
+    Validate ordered substrates and optional products using list schema.
 
     Args:
-        dataframe: DataFrame containing Substrates and Products columns
+        dataframe: DataFrame containing Substrates and optional Products columns
 
     Returns:
         List of validation errors
     """
     invalid_substrates = []
 
-    for i, (subs, prods) in enumerate(zip(dataframe["Substrates"], dataframe["Products"])):
+    has_products = "Products" in dataframe.columns
+    for i in range(len(dataframe)):
         row_num = i + 1
-        invalid_tokens = []
+        subs = dataframe["Substrates"].iloc[i]
+        substrate_tokens = split_substrate_list(subs)
+        invalid_substrates_for_row = []
+        invalid_products_for_row = []
 
-        # Validate each substrate token
-        for substrate in str(subs).split(";"):
-            token = substrate.strip()
-            if token and safe_convert_to_mol(token) is None:
-                invalid_tokens.append(token)
+        for position, token in enumerate(substrate_tokens, start=1):
+            if safe_convert_to_mol(token) is None:
+                invalid_substrates_for_row.append({"position": position, "value": token})
 
-        # Validate each product token
-        for product in str(prods).split(";"):
-            token = product.strip()
-            if token and safe_convert_to_mol(token) is None:
-                invalid_tokens.append(token)
-
-        if invalid_tokens:
+        if not substrate_tokens:
             invalid_substrates.append(
                 {
                     "row": row_num,
-                    "value": invalid_tokens,
+                    "value": subs,
+                    "reason": "Empty substrate list",
+                    "invalid_components": [],
+                }
+            )
+            continue
+
+        if has_products:
+            prods = dataframe["Products"].iloc[i]
+            product_tokens = split_substrate_list(prods)
+            for position, token in enumerate(product_tokens, start=1):
+                if safe_convert_to_mol(token) is None:
+                    invalid_products_for_row.append({"position": position, "value": token})
+            if not product_tokens:
+                invalid_products_for_row.append({"position": None, "value": prods})
+
+        if invalid_substrates_for_row or invalid_products_for_row:
+            invalid_values = [item["value"] for item in invalid_substrates_for_row]
+            invalid_values.extend(item["value"] for item in invalid_products_for_row)
+            invalid_substrates.append(
+                {
+                    "row": row_num,
+                    "value": invalid_values,
                     "reason": "Invalid substrate/product SMILES/InChI",
+                    "invalid_substrates": invalid_substrates_for_row,
+                    "invalid_products": invalid_products_for_row,
                 }
             )
 
@@ -195,8 +221,8 @@ def validate_substrates(dataframe: pd.DataFrame) -> List[Dict[str, Any]]:
     """
     if "Substrate" in dataframe.columns:
         return validate_single_substrate_schema(dataframe)
-    elif "Substrates" in dataframe.columns and "Products" in dataframe.columns:
-        return validate_full_reaction_schema(dataframe)
+    elif "Substrates" in dataframe.columns:
+        return validate_substrate_list_schema(dataframe)
     else:
         return []
 

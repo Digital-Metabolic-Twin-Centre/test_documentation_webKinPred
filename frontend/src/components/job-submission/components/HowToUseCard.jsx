@@ -9,8 +9,8 @@ import '../../../styles/components/HowToUseCard.css';
 const FORMAT_SPECS = [
   {
     key: 'single',
-    name: 'Single-Substrate',
-    methods: ['CataPro', 'CatPred (Km)', 'DLKcat', 'EITLEM', 'IECata', 'KinForm-H', 'KinForm-L', 'MMISA-KM', 'OmniESI', 'RealKcat', 'UniKP'],
+    name: 'One Substrate',
+    methods: ['All compatible substrate-pair methods'],
     columns: [
       { col: 'Protein Sequence', desc: 'full amino-acid sequence' },
       { col: 'Substrate',        desc: 'SMILES or InChI — one per row' },
@@ -18,17 +18,17 @@ const FORMAT_SPECS = [
   },
   {
     key: 'multi',
-    name: 'Multi-Substrate',
-    methods: ['CatPred (kcat)'],
+    name: 'Substrate List',
+    methods: ['All compatible substrate-pair methods', 'kcat max · KM/ratio arrays'],
     columns: [
       { col: 'Protein Sequence', desc: 'full amino-acid sequence' },
-      { col: 'Substrate',        desc: <span>co-substrates joined with <code className="fmt-dot">.</code> <span className="fmt-eg">e.g. CC(=O)O.O</span></span> },
+      { col: 'Substrates',       desc: <span>ordered values joined with <code className="fmt-dot">;</code></span> },
     ],
   },
   {
     key: 'full',
     name: 'Full Reaction',
-    methods: ['TurNup'],
+    methods: ['Products required by TurNup; ignored by pair methods'],
     columns: [
       { col: 'Protein Sequence', desc: 'full amino-acid sequence' },
       { col: 'Substrates',       desc: 'semicolon-separated SMILES or InChI' },
@@ -212,7 +212,7 @@ export default function HowToUseCard({ methods = {} }) {
             className="btn btn-custom-subtle"
           >
             <BoxArrowInDown className="me-2" />
-            Multi-Substrate Template
+            Substrate-List Template
           </Button>
 
           <Button

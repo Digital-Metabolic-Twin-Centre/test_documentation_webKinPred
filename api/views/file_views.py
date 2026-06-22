@@ -25,32 +25,34 @@ def detect_csv_format(request):
     errors = []
     required_cols = {"Protein Sequence"}
     has_substrate = "Substrate" in df.columns
-    has_full_reaction_cols = "Substrates" in df.columns and "Products" in df.columns
+    has_substrates = "Substrates" in df.columns
+    has_products = "Products" in df.columns
 
     if not required_cols.issubset(df.columns):
         errors.append("Missing required column: 'Protein Sequence'")
 
-    if not has_substrate and not has_full_reaction_cols:
+    if not has_substrate and not has_substrates:
         errors.append(
-            "Missing substrate information: expected either 'Substrate' or both 'Substrates' and 'Products'"
+            "Missing substrate information: expected either 'Substrate' or 'Substrates'"
         )
+    if has_products and not has_substrates:
+        errors.append("'Products' requires a 'Substrates' column")
 
     if errors:
         return JsonResponse({"status": "invalid", "errors": errors})
 
-    if has_full_reaction_cols and has_substrate:
+    if has_substrates and has_substrate:
         return JsonResponse(
             {
                 "status": "invalid",
-                "errors": ["Cannot have both 'Substrate' and 'Substrates'/'Products' columns."],
+                "errors": ["Cannot have both 'Substrate' and 'Substrates' columns."],
             },
             status=400,
         )
 
     valid_response = {"status": "valid", "num_rows": len(df)}
-    if has_full_reaction_cols:
-        # Full-reaction schema (TurNup): explicit substrates and products columns.
-        valid_response["csv_type"] = "full_reaction"
+    if has_substrates:
+        valid_response["csv_type"] = "full_reaction" if has_products else "substrate_list"
     else:
         if not has_substrate:
             return JsonResponse(

@@ -82,16 +82,19 @@ export default function useJobSubmission() {
     [orderedTargets, targetMethods]
   );
 
-  // Allowed methods derived from CSV format and registry.
-  // - single/multi: "Protein Sequence" + "Substrate" (same method set)
-  // - full_reaction: "Protein Sequence" + "Substrates" + "Products" (TurNup path)
+  // Accepted schemas are published by the backend. Pair-based methods support
+  // ordered Substrates lists; full-reaction methods still require Products.
   const allowedMethodsByTarget = useMemo(() => {
     const out = { kcat: [], Km: [], 'kcat/Km': [] };
     if (!methods || !csvFormatInfo?.csv_type) return out;
 
     const csvType = csvFormatInfo.csv_type;
     const canUseMethod = (methodMeta) => {
-      if (csvType === 'full_reaction') return methodMeta.inputFormat === 'multi';
+      if (Array.isArray(methodMeta.acceptedCsvTypes)) {
+        return methodMeta.acceptedCsvTypes.includes(csvType);
+      }
+      if (csvType === 'full_reaction') return true;
+      if (csvType === 'substrate_list') return methodMeta.inputFormat === 'single';
       return methodMeta.inputFormat === 'single';
     };
 

@@ -11,6 +11,7 @@ from django.utils import timezone
 from api.utils import get_experimental
 from api.services.embedding_progress_service import get_embedding_progress
 from api.services.job_progress_service import get_active_stage_embedding, get_progress_summary
+from api.utils.substrate_expansion import SubstrateExpansionPlan
 
 TARGET_ORDER = ["kcat", "Km", "kcat/Km"]
 VALID_TARGETS = set(TARGET_ORDER)
@@ -148,11 +149,18 @@ def validate_required_columns_for_methods(
     """
     Validate CSV columns for selected methods.
 
-    Methods requiring "Substrate" must receive a "Substrate" column.
-    Full-reaction input ("Substrates" + "Products") is only valid for methods
-    that explicitly declare those columns (for example, TurNup).
+    Pair-based methods accept either ``Substrate`` or ``Substrates``. Native
+    full-reaction methods still require both ``Substrates`` and ``Products``.
     """
     from api.methods.registry import get
+
+    has_substrate = "Substrate" in dataframe.columns
+    has_substrates = "Substrates" in dataframe.columns
+    has_products = "Products" in dataframe.columns
+    if has_substrate and has_substrates:
+        return "Cannot have both 'Substrate' and 'Substrates' columns."
+    if has_products and not has_substrates:
+        return "'Products' requires a 'Substrates' column."
 
     missing: set[str] = set()
     if "Protein Sequence" not in dataframe.columns:
@@ -167,9 +175,16 @@ def validate_required_columns_for_methods(
         except KeyError:
             continue
 
-        for col in desc.col_to_kwarg.keys():
-            if col not in dataframe.columns:
-                missing.add(col)
+        if desc.input_format == "single":
+            if not (has_substrate or has_substrates):
+                missing.add("Substrate or Substrates")
+            for col in desc.col_to_kwarg.keys():
+                if col != "Substrate" and col not in dataframe.columns:
+                    missing.add(col)
+        else:
+            for col in desc.col_to_kwarg.keys():
+                if col not in dataframe.columns:
+                    missing.add(col)
 
     if not missing:
         return None
@@ -212,42 +227,66 @@ def get_experimental_results(
     """
     Look up experimental kinetic values when the user has opted in.
 
-    Experimental lookup is skipped for full-reaction methods (TurNup) since
-    the experimental database is indexed by single substrate strings.
+    Experimental lookup is skipped for native full-reaction methods (TurNup).
+    For pair-based methods, ``Substrates`` rows are expanded positionally and
+    each protein/substrate pair is looked up independently.
 
     Returns a dict keyed by target ("kcat", "Km"), or None.
     """
     if not use_experimental:
         return None
 
-    if "Substrate" not in dataframe.columns:
-        return None
-
     selected = set(targets)
     out: Dict[str, list[dict[str, Any]]] = {}
 
-    if "kcat" in selected:
-        kcat_method = methods.get("kcat")
-        if kcat_method:
-            try:
-                from api.methods.registry import get
+    from api.methods.registry import get
 
-                desc = get(kcat_method)
-                if desc.input_format != "multi":
-                    out["kcat"] = get_experimental.lookup_experimental(
-                        dataframe["Protein Sequence"].tolist(),
-                        dataframe["Substrate"].tolist(),
-                        param_type="kcat",
-                    )
-            except KeyError:
-                pass
+    for target, param_type in (("kcat", "kcat"), ("Km", "Km")):
+        if target not in selected:
+            continue
+        method_key = methods.get(target)
+        if not method_key:
+            continue
+        try:
+            desc = get(method_key)
+        except KeyError:
+            continue
+        # Full-reaction models do not have a single substrate lookup key.
+        if desc.input_format == "multi":
+            continue
 
-    if "Km" in selected:
-        out["Km"] = get_experimental.lookup_experimental(
-            dataframe["Protein Sequence"].tolist(),
-            dataframe["Substrate"].tolist(),
-            param_type="Km",
+        sequences = dataframe["Protein Sequence"].tolist()
+        if "Substrate" in dataframe.columns:
+            out[target] = get_experimental.lookup_experimental(
+                sequences,
+                dataframe["Substrate"].tolist(),
+                param_type=param_type,
+            )
+            continue
+        if "Substrates" not in dataframe.columns:
+            continue
+
+        plan = SubstrateExpansionPlan.build(
+            dataframe["Substrates"].tolist(),
+            range(len(dataframe)),
         )
+        results = get_experimental.lookup_experimental(
+            plan.expanded_sequences(sequences),
+            plan.expanded_substrates(),
+            param_type=param_type,
+        )
+        if len(results) != len(plan.children):
+            raise ValueError(
+                f"Experimental lookup returned {len(results)} result(s) for "
+                f"{len(plan.children)} substrate(s)."
+            )
+        enriched: list[dict[str, Any]] = []
+        for child_index, child in enumerate(plan.children):
+            result = dict(results[child_index])
+            result["reaction_idx"] = child.reaction_position
+            result["substrate_idx"] = child.substrate_position
+            enriched.append(result)
+        out[target] = enriched
 
     return out or None
 

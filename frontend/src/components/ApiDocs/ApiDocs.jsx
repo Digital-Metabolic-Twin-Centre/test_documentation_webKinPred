@@ -325,8 +325,8 @@ response = requests.post(
         "includeSimilarityColumns": True,
         "canonicalizeSubstrates": True,
         "data": [
-            {"Protein Sequence": "MKTLLIFAGFCLAGLSLTPVAHA...", "Substrate": "CC(=O)O"},
-            {"Protein Sequence": "MGSSHHHHHHSSGLVPRGSH...",   "Substrate": "C1CCCCC1"},
+            {"Protein Sequence": "MKTLLIFAGFCLAGLSLTPVAHA...", "Substrates": "CC(=O)O;O"},
+            {"Protein Sequence": "MGSSHHHHHHSSGLVPRGSH...",   "Substrates": "C1CCCCC1;CCO"},
         ],
     },
 )
@@ -458,6 +458,7 @@ export default function ApiDocs() {
       "id": "DLKcat",
       "predicts": ["kcat"],
       "requiredColumns": ["Protein Sequence", "Substrate"],
+      "acceptedCsvTypes": ["single", "multi", "substrate_list", "full_reaction"],
       "maxSequenceLength": null
     },
     {
@@ -800,7 +801,8 @@ export default function ApiDocs() {
           <div className="api-callout api-callout-info">
             The <code>"data"</code> array must contain objects whose keys are the exact
             column names required by your chosen method (e.g.{' '}
-            <code>"Protein Sequence"</code> and <code>"Substrate"</code>). Column names
+            <code>"Protein Sequence"</code> and either <code>"Substrate"</code> or{' '}
+            <code>"Substrates"</code>). Column names
             are case-sensitive.
           </div>
         </section>
@@ -809,7 +811,9 @@ export default function ApiDocs() {
         <section className="api-docs-section">
           <h2>CSV Format Reference</h2>
           <p style={{ marginBottom: '1rem', opacity: 0.85 }}>
-            The required columns depend on the method you choose:
+            Pair-based methods accept either one <code>Substrate</code> or an ordered,
+            semicolon-separated <code>Substrates</code> list. TurNup requires a full reaction
+            with <code>Products</code>.
           </p>
           <div className="api-callout api-callout-info" style={{ marginBottom: '1rem' }}>
             <strong>Handling long protein sequences:</strong> Set <code>handleLongSequences</code> in
@@ -912,11 +916,10 @@ export default function ApiDocs() {
           <div className="api-callout api-callout-info" style={{ marginTop: '1rem' }}>
             <strong>Substrate format:</strong> Use SMILES strings (e.g.{' '}
             <code>CC(=O)O</code> for acetic acid) or InChI strings. Single inputs use
-            one value in <code>Substrate</code>. Multi-substrate inputs dot-join
-            co-substrates in <code>Substrate</code>, e.g. <code>CC(=O)O.O</code>.
-            Full-reaction inputs, used by TurNup, separate multiple substrates or
-            products with semicolons in <code>Substrates</code> and <code>Products</code>,
-            e.g. <code>CC(=O)O;C1CCCCC1</code>.
+            one value in <code>Substrate</code>. Ordered lists use semicolons in{' '}
+            <code>Substrates</code>, e.g. <code>CC(=O)O;C1CCCCC1</code>. Pair methods
+            return the maximum kcat and JSON-encoded Km and kcat/Km arrays; failed positions
+            are <code>null</code>. TurNup additionally requires <code>Products</code>.
           </div>
         </section>
 
@@ -925,7 +928,8 @@ export default function ApiDocs() {
           <h2>Rate Limits</h2>
           <p style={{ lineHeight: 1.7, opacity: 0.9 }}>
             Each user is subject to a daily prediction quota. The default limit is{' '}
-            <strong>20,000 predictions per day</strong>, resetting at midnight UTC.
+            <strong>20,000 input reaction rows per day</strong>, resetting at midnight UTC.
+            Expanded per-substrate predictions do not consume extra quota.{' '}
             Custom limits can be arranged for high-throughput workflows.
           </p>
           <p style={{ lineHeight: 1.7, opacity: 0.9 }}>

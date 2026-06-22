@@ -648,7 +648,8 @@
   font-size: 0.65rem;
   padding: 0.16rem 0.36rem;
   border-radius: 4px;
-  white-space: nowrap;
+  white-space: normal;
+  line-height: 1.2;
   border: 1px solid transparent;
 }
 

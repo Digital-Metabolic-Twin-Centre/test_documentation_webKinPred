@@ -41,9 +41,9 @@ descriptor = MethodDescriptor(
 - `input_format`: backend CSV column contract expected by the method.
   Descriptors use `single` for the `Substrate` column contract and `multi` for
   the full-reaction `Substrates` + `Products` contract.
-  User-facing docs should describe the three CSV formats: `single`, `multi`
-  (dot-joined co-substrates in `Substrate`), and `full reaction`
-  (`Substrates` + `Products`).
+  The orchestration layer automatically expands semicolon-separated
+  `Substrates` values for every `single` descriptor, so predictor integrations
+  should continue declaring only their native one-substrate contract.
 - `col_to_kwarg`: maps CSV columns to kwargs passed into your method runtime.
 - `target_kwargs`: per-target switches (for shared kcat/Km scripts).
 - `subprocess` or `pred_func`: set exactly one.

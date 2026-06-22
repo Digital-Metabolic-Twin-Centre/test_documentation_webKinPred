@@ -141,6 +141,7 @@ def api_list_methods(request):
           "moreInfo":          str,
           "supports":          list[str],   // e.g. ["kcat", "Km", "kcat/Km"]
           "inputFormat":       str,         // backend contract: "single" or "multi"
+          "acceptedCsvTypes":  list[str],   // UI/API input schemas accepted by the method
           "maxSeqLen":         int | null,  // null means no limit
           "requiredColumns":   list[str],   // includes "Protein Sequence"
           "substrateFormat":   str,
@@ -160,14 +161,19 @@ def api_list_methods(request):
     def _method_obj(key, desc):
         max_len = None if desc.max_seq_len == float("inf") else int(desc.max_seq_len)
         required_cols = ["Protein Sequence"] + list(desc.col_to_kwarg.keys())
-        substrate_fmt = (
-            "Full reaction: semicolon-separated SMILES or InChI strings in Substrates and Products"
-            if desc.input_format == "multi"
-            else (
-                "Single substrate: one SMILES/InChI per row; multi-substrate inputs use dot-joined "
-                "co-substrates in the same Substrate cell"
+        if desc.input_format == "multi":
+            accepted_csv_types = ["full_reaction"]
+            substrate_fmt = (
+                "Full reaction: semicolon-separated SMILES or InChI strings in "
+                "Substrates and Products"
             )
-        )
+        else:
+            accepted_csv_types = ["single", "multi", "substrate_list", "full_reaction"]
+            substrate_fmt = (
+                "Use Substrate for one molecular input, or semicolon-separated Substrates. "
+                "For Substrates inputs, kcat is reduced by maximum; Km and kcat/Km remain "
+                "ordered arrays"
+            )
         return {
             "id": key,
             "displayName": desc.display_name,
@@ -178,6 +184,7 @@ def api_list_methods(request):
             "moreInfo": desc.more_info,
             "supports": desc.supports,
             "inputFormat": desc.input_format,
+            "acceptedCsvTypes": accepted_csv_types,
             "maxSeqLen": max_len,
             "requiredColumns": required_cols,
             "substrateFormat": substrate_fmt,
@@ -208,7 +215,12 @@ def api_list_methods(request):
                     "selection via 'methods' (object mapping each selected target "
                     "to a method key)."
                 ),
-                "quota": "Each row in your CSV counts as one prediction against your daily quota.",
+                "substrateLists": (
+                    "Pair-based methods accept semicolon-separated values in 'Substrates'. "
+                    "Reaction kcat uses the maximum successful child prediction; Km and "
+                    "kcat/Km use ordered JSON arrays. TurNup additionally requires 'Products'."
+                ),
+                "quota": "Each input reaction row counts once against your daily quota.",
             },
         }
     )
@@ -270,7 +282,7 @@ def api_submit_job(request):
            "canonicalizeSubstrates": true,
            "disableGpuPrecompute": false,
            "data": [
-             {"Protein Sequence": "MKTL...", "Substrate": "CC(=O)O"},
+             {"Protein Sequence": "MKTL...", "Substrates": "CC(=O)O;O"},
              ...
            ]
          }
@@ -627,6 +639,10 @@ def api_download_result(request, public_id):
       - A "Source" column indicating whether the value came from a model
         or from the experimental database
       - An "Extra Info" column with additional details
+
+    For ``Substrates`` inputs, Km and direct kcat/Km cells contain JSON-encoded
+    arrays. They remain strings in CSV and in the JSON result envelope so both
+    formats represent the same output exactly.
 
     Returns 409 Conflict if the job has not yet completed.
     Returns 404 if the job does not exist.

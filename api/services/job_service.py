@@ -131,8 +131,13 @@ def process_job_submission_from_params(
         return JsonResponse({"error": required_columns_error}, status=400), None
 
     # Ensure key columns are not mostly empty.
-    if "Substrate" in dataframe.columns:
-        emptiness_error = validate_column_emptiness(dataframe, "Substrate")
+    substrate_column = (
+        "Substrate"
+        if "Substrate" in dataframe.columns
+        else "Substrates" if "Substrates" in dataframe.columns else None
+    )
+    if substrate_column:
+        emptiness_error = validate_column_emptiness(dataframe, substrate_column)
         if emptiness_error:
             return JsonResponse({"error": emptiness_error}, status=400), None
 
