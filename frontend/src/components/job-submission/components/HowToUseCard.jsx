@@ -198,10 +198,7 @@ export default function HowToUseCard({ methods = {} }) {
           <ExclamationTriangle size={24} className="me-3 howto-limit-icon" />
           <div>
             <strong>Single-substrate methods also accept Multi-Substrate and Full-Reaction files.</strong>{' '}
-            They predict every semicolon-separated substrate independently: k<sub>cat</sub> uses the
-            maximum successful prediction, while K<sub>M</sub> and direct k<sub>cat</sub>/K<sub>M</sub>{' '}
-            return ordered JSON arrays. Products are preserved but ignored by these methods;
-            CatPred k<sub>cat</sub> also accepts Full-Reaction files and keeps its native combined prediction.
+            They predict every semicolon-separated substrate independently: k<sub>cat</sub> uses the maximum prediction.
           </div>
         </Alert>
 
