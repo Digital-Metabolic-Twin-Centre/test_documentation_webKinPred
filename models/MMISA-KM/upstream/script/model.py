@@ -133,7 +133,7 @@ class MultiHeadAttentionInteract(nn.Module):
 
         attn_w = F.softmax(inner, dim=-1)
 
-        attn_w = F.dropout(attn_w, p=self.dropout)
+        F.dropout(attn_w, p=self.dropout, training=self.training)
 
         results = torch.matmul(attn_w, Value)
 
