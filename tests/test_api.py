@@ -1701,6 +1701,15 @@ def main():
         ),
     )
     parser.add_argument(
+        "--only-multi-sub",
+        action="store_true",
+        help=(
+            "Focused run: ONLY execute the multi-substrate value-level checks "
+            "(same as --test-multi-sub-for-single-sub-methods) against the fixed/"
+            "cached sequences, and skip every other test group. Implies that flag."
+        ),
+    )
+    parser.add_argument(
         "--skip-gpu",
         action="store_true",
         help=(
@@ -1741,6 +1750,20 @@ def main():
     print(f"  Base URL : {base}")
     print(f"  API Key  : {key[:15]}…")
     print(f"  Methods  : {', '.join(sorted(methods))}")
+
+    # Focused mode: only run the cached multi-substrate value checks, skip the
+    # rest of the suite. --only-multi-sub implies the value-verification test.
+    if args.only_multi_sub:
+        print("  Mode     : ONLY multi-substrate value verification (cached sequences)")
+        print("=" * 70)
+        test_multi_sub_for_single_sub_methods(
+            base,
+            headers,
+            methods,
+            poll_timeout=args.poll_timeout,
+        )
+        return _print_summary()
+
     print(f"  Variants : {'extra' if args.extra_submit_variants else 'minimal'}")
     print(
         "  Multi-sub: "
@@ -1814,7 +1837,11 @@ def main():
     # Method-not-allowed sanity check
     test_wrong_methods(base, headers)
 
-    # ── Summary ─────────────────────────────────────────────────────────────
+    _print_summary()
+
+
+def _print_summary() -> None:
+    """Print the pass/fail summary and exit non-zero if anything failed."""
     total = len(_results)
     passed = sum(1 for _, ok, _ in _results if ok)
     failed = total - passed
