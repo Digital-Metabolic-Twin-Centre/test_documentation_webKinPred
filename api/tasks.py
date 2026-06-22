@@ -294,6 +294,7 @@ def run_multi_prediction(
     canonicalize_substrates: bool = True,
     include_similarity_columns: bool = True,
     disable_gpu_precompute: bool = False,
+    recon_xkg: bool = False,
 ) -> None:
     """
     Run a multi-target prediction job.
@@ -355,6 +356,7 @@ def run_multi_prediction(
             canonicalize_substrates=canonicalize_substrates,
             include_similarity_columns=include_similarity_columns,
             disable_gpu_precompute=disable_gpu_precompute,
+            recon_xkg=recon_xkg,
         )
         Job.objects.filter(pk=job.pk).update(
             status="Completed",
@@ -399,8 +401,13 @@ def _execute_multi_prediction(
     canonicalize_substrates: bool = True,
     include_similarity_columns: bool = True,
     disable_gpu_precompute: bool = False,
+    recon_xkg: bool = False,
 ) -> None:
     """Run targets through the canonical reaction/child orchestration path."""
+    # ReconXKG cache hit/miss accounting, aggregated across all target stages.
+    cache_stats: dict[str, int] | None = (
+        {"hits": 0, "misses": 0, "units": 0} if recon_xkg else None
+    )
     sequences = df["Protein Sequence"].tolist()
     n_rows = len(sequences)
     limits = [min(SERVER_LIMIT, desc.max_seq_len) for desc in desc_by_target.values()]
@@ -450,6 +457,8 @@ def _execute_multi_prediction(
                 canonicalize_substrates=canonicalize_substrates,
                 disable_gpu_precompute=disable_gpu_precompute,
                 extra_call_kwargs=extra_call_kwargs,
+                recon_xkg=recon_xkg,
+                cache_stats=cache_stats,
             )
         except Exception as exc:
             mark_stage_failed(job.public_id, target, desc.key, message=str(exc))
@@ -484,7 +493,22 @@ def _execute_multi_prediction(
     out_path = _output_path(job.public_id)
     results_df.to_csv(out_path, index=False)
     if include_similarity_columns and "kcat" in targets:
-        append_kcat_similarity_columns_to_output_csv(out_path, desc_by_target["kcat"].key)
+        append_kcat_similarity_columns_to_output_csv(
+            out_path,
+            desc_by_target["kcat"].key,
+            recon_xkg=recon_xkg,
+        )
+
+    if cache_stats is not None:
+        from api.utils.recon_xkg import log_recon_xkg_outcome
+
+        log_recon_xkg_outcome(
+            api_key_id=_job_quota_subject(job),
+            public_id=job.public_id,
+            row_count=n_rows,
+            hit_count=cache_stats["hits"],
+            miss_count=cache_stats["misses"],
+        )
 
     fully_predicted = pd.Series(True, index=results_df.index)
     for target in targets:
@@ -516,6 +540,8 @@ def _execute_target_batch(
     canonicalize_substrates: bool,
     disable_gpu_precompute: bool,
     extra_call_kwargs: dict[str, Any],
+    recon_xkg: bool = False,
+    cache_stats: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Execute one method/target either natively or as an expanded child batch."""
     n_rows = len(sequences)
@@ -542,6 +568,8 @@ def _execute_target_batch(
                 target=target,
                 canonicalize_substrates=canonicalize_substrates,
                 disable_gpu_precompute=disable_gpu_precompute,
+                recon_xkg=recon_xkg,
+                cache_stats=cache_stats,
                 **call_kwargs,
             )
         else:
@@ -623,6 +651,8 @@ def _execute_target_batch(
         extra_call_kwargs=extra_call_kwargs,
         call_kwargs_override=native_call_kwargs,
         apply_experimental_overrides=input_behavior == "expanded_pair",
+        recon_xkg=recon_xkg,
+        cache_stats=cache_stats,
     )
 
 
@@ -686,6 +716,8 @@ def _execute_native_target_batch(
     extra_call_kwargs: dict[str, Any],
     call_kwargs_override: dict[str, list[Any]] | None = None,
     apply_experimental_overrides: bool = True,
+    recon_xkg: bool = False,
+    cache_stats: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     n_rows = len(sequences)
     predictions: list[Any] = [""] * n_rows
@@ -714,6 +746,8 @@ def _execute_native_target_batch(
             target=target,
             canonicalize_substrates=canonicalize_substrates,
             disable_gpu_precompute=disable_gpu_precompute,
+            recon_xkg=recon_xkg,
+            cache_stats=cache_stats,
             **call_kwargs,
         )
         for local_index, reaction_index in enumerate(valid_reaction_indices):
@@ -931,10 +965,55 @@ def _invoke_method_prediction(
     target: str,
     canonicalize_substrates: bool = True,
     disable_gpu_precompute: bool = False,
+    recon_xkg: bool = False,
+    cache_stats: dict[str, int] | None = None,
     **call_kwargs,
 ) -> tuple[list, dict[int, str]]:
     """
-    Invoke a method using either:
+    Invoke a method, optionally served from the ReconXKG memoization store.
+
+    Without ``recon_xkg`` this calls the real engine directly. With it, each
+    positional input unit (one element of ``sequences`` plus its aligned
+    substrate/products) is looked up in the cache; only misses are sent to the
+    engine, fresh results are written back, and the merged list is returned in
+    the original order. Either way the return contract is identical:
+    ``(predictions, invalid_reasons)`` where ``invalid_reasons`` maps local
+    indices (into ``sequences``) to human-readable skip reasons.
+    """
+    if not recon_xkg:
+        return _run_method_engine(
+            desc,
+            sequences,
+            public_id,
+            target,
+            canonicalize_substrates=canonicalize_substrates,
+            disable_gpu_precompute=disable_gpu_precompute,
+            **call_kwargs,
+        )
+
+    return _invoke_method_prediction_cached(
+        desc,
+        sequences,
+        public_id,
+        target,
+        canonicalize_substrates=canonicalize_substrates,
+        disable_gpu_precompute=disable_gpu_precompute,
+        cache_stats=cache_stats,
+        call_kwargs=call_kwargs,
+    )
+
+
+def _run_method_engine(
+    desc,
+    sequences: list[str],
+    public_id: str,
+    target: str,
+    canonicalize_substrates: bool = True,
+    disable_gpu_precompute: bool = False,
+    **call_kwargs,
+) -> tuple[list, dict[int, str]]:
+    """
+    Run a method's real prediction engine, either:
 
     1) a custom `pred_func` (legacy/current methods), or
     2) the built-in generic subprocess engine (recommended for new methods).
@@ -972,6 +1051,188 @@ def _invoke_method_prediction(
             return _validate_method_result(desc, sequences, preds, invalid_reasons)
 
     raise PredictionError(f"{desc.display_name} is not configured with a prediction engine.")
+
+
+def _recon_xkg_unit_keys(
+    desc,
+    target: str,
+    sequences: list[Any],
+    call_kwargs: dict[str, Any],
+    canonicalize_substrates: bool,
+) -> tuple[list[str | None], list[tuple[str, str, str] | None], str]:
+    """
+    Compute the per-unit cache lookup keys for one engine batch.
+
+    Returns ``(keys, components, params_fp)`` where, for each input position:
+      - ``keys[i]`` is the lookup key, or None if the unit is uncacheable
+        (missing/unparseable sequence or substrate/products);
+      - ``components[i]`` is ``(sequence_sha256, substrate_canon, products_canon)``
+        retained so a freshly computed miss can be written back without recompute.
+    """
+    from api.services import prediction_store as store
+
+    n = len(sequences)
+    model_version = getattr(desc, "model_version", "1")
+    params_fp = store.params_fingerprint(
+        canonicalize_substrates, desc.target_kwargs.get(target, {})
+    )
+
+    sub_kwarg = desc.col_to_kwarg.get("Substrate") or desc.col_to_kwarg.get("Substrates")
+    prod_kwarg = desc.col_to_kwarg.get("Products")
+    sub_values = call_kwargs.get(sub_kwarg) if sub_kwarg else None
+    prod_values = call_kwargs.get(prod_kwarg) if prod_kwarg else None
+
+    keys: list[str | None] = [None] * n
+    components: list[tuple[str, str, str] | None] = [None] * n
+
+    for i in range(n):
+        seq = sequences[i]
+        if seq is None:
+            continue
+
+        sub_val = (
+            sub_values[i]
+            if isinstance(sub_values, (list, tuple)) and i < len(sub_values)
+            else None
+        )
+        if sub_val is None:
+            continue
+        sub_canon = store.canonical_unit(sub_val, canonicalize_substrates)
+        if sub_canon is None:
+            continue  # unparseable substrate -> uncacheable, predict fresh
+
+        products_canon = ""
+        if prod_values is not None:
+            prod_val = (
+                prod_values[i]
+                if isinstance(prod_values, (list, tuple)) and i < len(prod_values)
+                else None
+            )
+            if prod_val is not None and str(prod_val).strip():
+                pc = store.canonical_unit(prod_val, canonicalize_substrates)
+                if pc is None:
+                    continue  # unparseable product -> uncacheable
+                products_canon = pc
+
+        seq_sha = store.sha256_text(str(seq))
+        keys[i] = store.make_lookup_key(
+            target=target,
+            method=desc.key,
+            model_version=model_version,
+            params_fp=params_fp,
+            sequence_sha256=seq_sha,
+            substrate_canon=sub_canon,
+            products_canon=products_canon,
+        )
+        components[i] = (seq_sha, sub_canon, products_canon)
+
+    return keys, components, params_fp
+
+
+def _invoke_method_prediction_cached(
+    desc,
+    sequences: list[str],
+    public_id: str,
+    target: str,
+    *,
+    canonicalize_substrates: bool,
+    disable_gpu_precompute: bool,
+    cache_stats: dict[str, int] | None,
+    call_kwargs: dict[str, Any],
+) -> tuple[list, dict[int, str]]:
+    """Serve a batch from the ReconXKG store, computing only the misses."""
+    from api.services import prediction_store as store
+
+    n = len(sequences)
+    model_version = getattr(desc, "model_version", "1")
+    keys, components, params_fp = _recon_xkg_unit_keys(
+        desc, target, sequences, call_kwargs, canonicalize_substrates
+    )
+
+    cached = store.get_many([key for key in keys if key])
+
+    predictions: list[Any] = [None] * n
+    invalid: dict[int, str] = {}
+    miss_indices: list[int] = []
+    hit_count = 0
+    for i, key in enumerate(keys):
+        if key and key in cached:
+            predictions[i] = cached[key]
+            hit_count += 1
+        else:
+            miss_indices.append(i)
+
+    if miss_indices:
+        # Slice only the positionally-aligned (per-row) kwargs; pass scalar
+        # kwargs (target flags, cleanup toggles) through unchanged.
+        aligned = set(desc.col_to_kwarg.values())
+        miss_sequences = [sequences[i] for i in miss_indices]
+        miss_kwargs: dict[str, Any] = {}
+        for kwarg, value in call_kwargs.items():
+            if kwarg in aligned and isinstance(value, (list, tuple)) and len(value) == n:
+                miss_kwargs[kwarg] = [value[i] for i in miss_indices]
+            else:
+                miss_kwargs[kwarg] = value
+
+        miss_preds, miss_invalid = _run_method_engine(
+            desc,
+            miss_sequences,
+            public_id,
+            target,
+            canonicalize_substrates=canonicalize_substrates,
+            disable_gpu_precompute=disable_gpu_precompute,
+            **miss_kwargs,
+        )
+
+        rows_to_store: list[dict[str, Any]] = []
+        for local_index, global_index in enumerate(miss_indices):
+            predictions[global_index] = miss_preds[local_index]
+            if local_index in miss_invalid:
+                invalid[global_index] = miss_invalid[local_index]
+                continue
+            key = keys[global_index]
+            component = components[global_index]
+            if not key or component is None:
+                continue  # uncacheable unit — never written back
+            value = store.coerce_value(miss_preds[local_index])
+            if value is None:
+                continue  # failed/non-numeric — surfaced like a normal failure
+            seq_sha, sub_canon, products_canon = component
+            rows_to_store.append(
+                {
+                    "lookup_key": key,
+                    "target": target,
+                    "method": desc.key,
+                    "model_version": model_version,
+                    "params_fingerprint": params_fp,
+                    "sequence_sha256": seq_sha,
+                    "substrate_canon": sub_canon,
+                    "products_canon": products_canon,
+                    "value": value,
+                }
+            )
+        store.upsert_many(rows_to_store)
+
+    if cache_stats is not None:
+        cache_stats["hits"] += hit_count
+        cache_stats["misses"] += len(miss_indices)
+        cache_stats["units"] += n
+
+    # Reflect full unit counts in progress so a (partly) cached stage does not
+    # under-report after the engine streamed only the miss subset.
+    successful = sum(1 for value in predictions if not _prediction_is_missing(value))
+    set_stage_prediction_snapshot(
+        job_public_id=public_id,
+        target=target,
+        method_key=desc.key,
+        molecules_total=n,
+        molecules_processed=n,
+        invalid_rows=len(invalid),
+        predictions_total=n,
+        predictions_made=successful,
+    )
+
+    return predictions, invalid
 
 
 def _validate_method_result(

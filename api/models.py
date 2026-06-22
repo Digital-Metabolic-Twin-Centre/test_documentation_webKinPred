@@ -77,6 +77,13 @@ class Job(models.Model):
         ],
     )
     canonicalize_substrates = models.BooleanField(default=True)
+    recon_xkg = models.BooleanField(
+        default=False,
+        help_text=(
+            "Internal: this job was served via the ReconXKG memoization store "
+            "(allowlisted keys only). Recorded for audit."
+        ),
+    )
 
     total_molecules = models.IntegerField(default=0)
     molecules_processed = models.IntegerField(default=0)
@@ -268,3 +275,110 @@ class AboutStatsCache(models.Model):
     def __str__(self):
         state = "stale" if self.is_stale else "fresh"
         return f"{self.key} [{state}]"
+
+
+class ReconXkgAllowedKey(models.Model):
+    """
+    Allowlist entry permitting one API key to activate the (undocumented)
+    ``recon_xkg`` submit parameter.
+
+    Membership in this table is the *only* thing that authorizes ReconXKG mode;
+    keys that are not present (or whose entry is inactive) silently fall back to
+    a normal job. The raw key is never stored here — only a reference to the
+    existing :class:`ApiKey` row.
+    """
+
+    api_key = models.OneToOneField(
+        ApiKey,
+        on_delete=models.CASCADE,
+        related_name="recon_xkg_allow",
+        help_text="API key permitted to enable recon_xkg.",
+    )
+    label = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+        help_text="Optional human-readable note for this allowlist entry.",
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Disable without deleting by unchecking this.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "ReconXKG Allowed Key"
+        verbose_name_plural = "ReconXKG Allowed Keys"
+
+    def __str__(self):
+        state = "active" if self.is_active else "inactive"
+        return f"recon_xkg:{self.api_key.key_prefix} [{state}]"
+
+
+class PredictionStore(models.Model):
+    """
+    Append/upsert memoization of a single raw model prediction unit.
+
+    One row caches the raw predicted value for one prediction unit, where a unit
+    is (post-truncation sequence, canonical substrate(s), canonical products,
+    target, method, model version, params fingerprint). The value stored is the
+    *raw* model output (before RealKcat class-range formatting, substrate
+    reduction, or experimental overrides) so downstream assembly is identical to
+    a freshly computed row.
+
+    Routed to the dedicated ``prediction_store`` database (see
+    api/dbrouters.py). ``lookup_key`` is a SHA-256 hex digest over all
+    prediction-affecting fields and is the only column on the hot lookup path.
+    """
+
+    prediction_store_db = True
+
+    lookup_key = models.CharField(max_length=64, unique=True)
+    target = models.CharField(max_length=16)
+    method = models.CharField(max_length=64)
+    model_version = models.CharField(max_length=32)
+    params_fingerprint = models.CharField(max_length=64)
+    sequence_sha256 = models.CharField(max_length=64)
+    substrate_canon = models.TextField()
+    products_canon = models.TextField(blank=True, default="")
+    value = models.FloatField()
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        verbose_name = "Prediction Store Entry"
+        verbose_name_plural = "Prediction Store Entries"
+        indexes = [
+            models.Index(fields=["model_version"], name="predstore_modelver_idx"),
+            models.Index(fields=["method", "target"], name="predstore_method_tgt_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.method}/{self.target}@{self.model_version}:{self.lookup_key[:12]}"
+
+
+class SimilarityStore(models.Model):
+    """
+    Memoization of per-sequence MMseqs2 similarity to a method's training set.
+
+    Similarity is a property of (sequence, training dataset) and is independent
+    of substrates or the kinetic value, so it is cached separately. This lets a
+    fully cached kcat job skip MMseqs2 entirely. Routed to ``prediction_store``.
+    """
+
+    prediction_store_db = True
+
+    lookup_key = models.CharField(max_length=64, unique=True)
+    sequence_sha256 = models.CharField(max_length=64, db_index=True)
+    dataset_label = models.CharField(max_length=128)
+    mean_similarity = models.FloatField(null=True, blank=True)
+    max_similarity = models.FloatField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        verbose_name = "Similarity Store Entry"
+        verbose_name_plural = "Similarity Store Entries"
+
+    def __str__(self):
+        return f"sim:{self.dataset_label}:{self.lookup_key[:12]}"

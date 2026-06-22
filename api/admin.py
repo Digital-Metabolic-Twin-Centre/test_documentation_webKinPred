@@ -2,7 +2,15 @@
 from django.contrib import admin
 from django.utils.html import format_html
 from django.urls import reverse
-from .models import ApiKey, ApiUser, Job, JobProgressStage
+from .models import (
+    ApiKey,
+    ApiUser,
+    Job,
+    JobProgressStage,
+    PredictionStore,
+    ReconXkgAllowedKey,
+    SimilarityStore,
+)
 from api.utils.quotas import (
     _key,
     get_all_user_quota_subjects,
@@ -285,3 +293,37 @@ class SequenceAdmin(admin.ModelAdmin):
     list_display = ("id", "len", "uses_count", "last_seen_at")
     search_fields = ("id", "seq", "sha256")
     readonly_fields = [f.name for f in Sequence._meta.fields]
+
+
+@admin.register(ReconXkgAllowedKey)
+class ReconXkgAllowedKeyAdmin(admin.ModelAdmin):
+    """Allowlist of API keys permitted to enable recon_xkg."""
+
+    list_display = ["api_key", "label", "is_active", "created_at"]
+    list_filter = ["is_active", "created_at"]
+    search_fields = ["api_key__label", "api_key__user__ip_address", "label"]
+    readonly_fields = ["created_at"]
+    autocomplete_fields = ["api_key"]
+
+
+@admin.register(PredictionStore)
+class PredictionStoreAdmin(admin.ModelAdmin):
+    list_display = [
+        "lookup_key",
+        "method",
+        "target",
+        "model_version",
+        "value",
+        "updated_at",
+    ]
+    list_filter = ["method", "target", "model_version"]
+    search_fields = ["lookup_key", "sequence_sha256"]
+    readonly_fields = [f.name for f in PredictionStore._meta.fields]
+
+
+@admin.register(SimilarityStore)
+class SimilarityStoreAdmin(admin.ModelAdmin):
+    list_display = ["lookup_key", "dataset_label", "mean_similarity", "max_similarity", "updated_at"]
+    list_filter = ["dataset_label"]
+    search_fields = ["lookup_key", "sequence_sha256"]
+    readonly_fields = [f.name for f in SimilarityStore._meta.fields]

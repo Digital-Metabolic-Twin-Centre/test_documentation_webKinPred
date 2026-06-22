@@ -291,6 +291,7 @@ def create_job_record(
         km_method=params["methods"].get("Km"),
         kcat_km_method=params["methods"].get("kcat/Km"),
         canonicalize_substrates=params.get("canonicalize_substrates", True),
+        recon_xkg=params.get("recon_xkg", False),
         status="Pending",
         handle_long_sequences=params["handle_long_sequences"],
         ip_address=ip_address,
@@ -334,6 +335,7 @@ def dispatch_prediction_task(
     canonicalize_substrates = params.get("canonicalize_substrates", True)
     include_similarity_columns = params.get("include_similarity_columns", True)
     disable_gpu_precompute = params.get("disable_gpu_precompute", False)
+    recon_xkg = params.get("recon_xkg", False)
 
     result = run_multi_prediction.delay(
         public_id,
@@ -343,6 +345,7 @@ def dispatch_prediction_task(
         canonicalize_substrates,
         include_similarity_columns,
         disable_gpu_precompute,
+        recon_xkg,
     )
     _log.info(
         "Prediction task dispatched",
@@ -355,6 +358,7 @@ def dispatch_prediction_task(
             "canonicalize_substrates": canonicalize_substrates,
             "include_similarity_columns": include_similarity_columns,
             "disable_gpu_precompute": disable_gpu_precompute,
+            "recon_xkg": recon_xkg,
         },
     )
 

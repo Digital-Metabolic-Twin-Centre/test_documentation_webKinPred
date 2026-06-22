@@ -299,6 +299,13 @@ class MethodDescriptor:
     repo_url: str
     more_info: str = ""
 
+    # ── Model/weights version ─────────────────────────────────────────────────
+    # Stable identifier for the model weights/algorithm version. Bumping this
+    # repartitions the ReconXKG prediction cache (new keys => recompute), so it
+    # MUST be incremented whenever a change would alter predicted values for the
+    # same inputs (new checkpoint, preprocessing change, etc.).
+    model_version: str = "1"
+
     # ── Capabilities ──────────────────────────────────────────────────────────
     supports: list[PredictionTarget] = field(default_factory=list)
     input_format: DescriptorInputFormat = "single"

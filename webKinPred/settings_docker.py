@@ -78,6 +78,19 @@ DATABASES = {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": "/app/media/sequence_info/seqmap.sqlite3",  # Use absolute path
     },
+    # Persistent ReconXKG memoization store (see settings.py for rationale).
+    "prediction_store": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": "/app/media/prediction_store.sqlite3",  # Use absolute path
+        "OPTIONS": {
+            "timeout": 30,
+            "init_command": (
+                "PRAGMA journal_mode=WAL;"
+                "PRAGMA synchronous=NORMAL;"
+                "PRAGMA busy_timeout=30000;"
+            ),
+        },
+    },
 }
 
 # Security settings for production

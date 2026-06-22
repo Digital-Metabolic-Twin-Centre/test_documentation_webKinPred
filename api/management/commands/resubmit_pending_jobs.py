@@ -93,6 +93,7 @@ class Command(BaseCommand):
                     "kcat_km_method": job.kcat_km_method,
                     "handle_long_sequences": job.handle_long_sequences,
                     "canonicalize_substrates": job.canonicalize_substrates,
+                    "recon_xkg": job.recon_xkg,
                     "user_id": job.user_id,
                     "submission_time": job.submission_time,
                 }
@@ -173,6 +174,7 @@ class Command(BaseCommand):
                 kcat_km_method=snap["kcat_km_method"],
                 handle_long_sequences=snap["handle_long_sequences"],
                 canonicalize_substrates=snap["canonicalize_substrates"],
+                recon_xkg=snap.get("recon_xkg", False),
                 user_id=snap["user_id"],
                 submission_time=snap["submission_time"],
                 status="Pending",
@@ -208,6 +210,8 @@ class Command(BaseCommand):
                 {},
                 bool(snap["canonicalize_substrates"]),
                 True,
+                False,
+                bool(snap.get("recon_xkg", False)),
             )
 
             self.stdout.write(

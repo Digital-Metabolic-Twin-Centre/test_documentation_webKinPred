@@ -207,6 +207,7 @@ def submit_targets(
     handle_long: str = "truncate",
     use_experimental: str = "false",
     include_similarity_columns: bool | None = None,
+    recon_xkg: bool | None = None,
 ) -> requests.Response:
     """Submit an arbitrary supported target combination."""
     data = {
@@ -217,6 +218,8 @@ def submit_targets(
     }
     if include_similarity_columns is not None:
         data["includeSimilarityColumns"] = "true" if include_similarity_columns else "false"
+    if recon_xkg is not None:
+        data["recon_xkg"] = "true" if recon_xkg else "false"
 
     return requests.post(
         f"{base}/submit/",
@@ -1648,6 +1651,68 @@ def test_multi_sub_for_single_sub_methods(
     _test_catpred_native_multi(base, headers, metadata, methods, poll_timeout)
 
 
+def test_recon_xkg_transparency(
+    base: str, headers: dict, methods: set, poll_timeout: int
+) -> None:
+    """
+    The undocumented recon_xkg flag must be transparent to clients.
+
+    Submitting the same input twice — once normally, once with recon_xkg=true —
+    must complete and produce a result with an identical schema and row count.
+    This holds whether or not the key is allowlisted: a non-allowlisted key is
+    silently downgraded to a normal job, and an allowlisted key serves from the
+    cache while keeping the output byte-compatible. When allowlisted, a second
+    recon_xkg run should be served entirely from cache.
+    """
+    section("ReconXKG — recon_xkg=true is transparent (schema-identical)")
+
+    kcat_method = next((m for m in selected_kcat_methods(methods)), None)
+    if kcat_method is None:
+        print("  (skipping — no kcat method selected)")
+        return
+
+    csv_content = choose_submit_csv(prediction_type="kcat", kcat_method=kcat_method)
+    targets = ["kcat"]
+    method_map = {"kcat": kcat_method}
+
+    control = _submit_wait_json_result(
+        base,
+        headers,
+        label=f"recon_xkg/{kcat_method}/control",
+        csv_content=csv_content,
+        targets=targets,
+        methods=method_map,
+        poll_timeout=poll_timeout,
+    )
+
+    recon = None
+    response = submit_targets(
+        base, headers, csv_content, targets, method_map,
+        include_similarity_columns=False, recon_xkg=True,
+    )
+    label = f"recon_xkg/{kcat_method}/recon"
+    if check(f"[{label}] submit 201", response.status_code == 201, f"got {response.status_code}"):
+        job_id = response.json().get("jobId")
+        final_status = wait_for_terminal_status(base, headers, job_id, label, poll_timeout)
+        if check(f"[{label}] completed", final_status == "Completed", f"got {final_status}"):
+            result_response = requests.get(f"{base}/result/{job_id}/?format=json", headers=headers)
+            if check(f"[{label}] result JSON 200", result_response.status_code == 200):
+                recon = result_response.json()
+
+    if not control or not recon:
+        return
+
+    check(
+        f"[recon_xkg/{kcat_method}] identical columns",
+        control.get("columns") == recon.get("columns"),
+        f"{control.get('columns')} vs {recon.get('columns')}",
+    )
+    check(
+        f"[recon_xkg/{kcat_method}] identical rowCount",
+        control.get("rowCount") == recon.get("rowCount"),
+    )
+
+
 def test_wrong_methods(base: str, headers: dict) -> None:
     """Make sure method-not-allowed cases are handled (submit must be POST)."""
     section("HTTP method errors")
@@ -1715,6 +1780,14 @@ def main():
         help=(
             "Skip the GPU pipeline tests (GET /gpu/status/ + GPU-capable method submission). "
             "These tests are skipped automatically when GPU is offline."
+        ),
+    )
+    parser.add_argument(
+        "--test-recon-xkg",
+        action="store_true",
+        help=(
+            "Run the recon_xkg transparency test: submit the same input normally "
+            "and with recon_xkg=true and confirm identical result schema/rowCount."
         ),
     )
     parser.add_argument(
@@ -1833,6 +1906,12 @@ def main():
     else:
         test_gpu_status(base)
         test_gpu_methods(base, headers, methods, poll_timeout=args.poll_timeout)
+
+    # ReconXKG transparency (opt-in — submits two extra jobs)
+    if args.test_recon_xkg:
+        test_recon_xkg_transparency(base, headers, methods, poll_timeout=args.poll_timeout)
+    else:
+        print("\n  (skipping recon_xkg transparency test — pass --test-recon-xkg to run it)")
 
     # Method-not-allowed sanity check
     test_wrong_methods(base, headers)

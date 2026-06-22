@@ -128,12 +128,27 @@ DATABASES = {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": BASE_DIR / "media/sequence_info/seqmap.sqlite3",
     },
+    # Persistent ReconXKG prediction/similarity memoization store. Kept in its
+    # own SQLite file (WAL mode) so cache reads/writes never contend with the
+    # primary application database. See api/services/prediction_store.py.
+    "prediction_store": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": BASE_DIR / "media/prediction_store.sqlite3",
+        "OPTIONS": {
+            "timeout": 30,
+            "init_command": (
+                "PRAGMA journal_mode=WAL;"
+                "PRAGMA synchronous=NORMAL;"
+                "PRAGMA busy_timeout=30000;"
+            ),
+        },
+    },
 }
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 
-DATABASE_ROUTERS = ["api.dbrouters.SeqMapRouter"]
+DATABASE_ROUTERS = ["api.dbrouters.SeqMapRouter", "api.dbrouters.PredictionStoreRouter"]
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [

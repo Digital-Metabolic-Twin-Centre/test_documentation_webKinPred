@@ -45,6 +45,7 @@ from api.services.job_progress_service import get_active_stage_embedding, get_pr
 from api.utils.api_auth import require_api_key
 from api.utils.job_utils import coerce_bool_param
 from api.utils.quotas import get_quota_usage
+from api.utils.recon_xkg import coerce_recon_xkg, resolve_recon_xkg
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +333,14 @@ def api_submit_job(request):
     if error:
         return error
 
+    # Resolve the (undocumented) recon_xkg flag here, where the authenticated
+    # API key is available. Non-allowlisted requests are silently downgraded to
+    # a normal job — no distinctive error — and only audited server-side.
+    params["recon_xkg"] = resolve_recon_xkg(
+        request.api_key,
+        params.get("recon_xkg", False),
+    )
+
     error_response, success_data = process_job_submission_from_params(
         params,
         csv_file,
@@ -398,6 +407,9 @@ def _parse_multipart_body(request):
             request.POST.get("disableGpuPrecompute"),
             default=False,
         ),
+        # Undocumented: kept out of the public schema/docs on purpose. Holds the
+        # *requested* value here; authorization is resolved in the view.
+        "recon_xkg": coerce_recon_xkg(request.POST.get("recon_xkg")),
     }
 
     targets_raw = request.POST.get("targets", "")
@@ -497,6 +509,9 @@ def _parse_json_body(request):
             body.get("disableGpuPrecompute"),
             default=False,
         ),
+        # Undocumented (see multipart parser). Requested value only; the view
+        # resolves authorization before dispatch.
+        "recon_xkg": coerce_recon_xkg(body.get("recon_xkg")),
     }
 
     return csv_bytes, params, None

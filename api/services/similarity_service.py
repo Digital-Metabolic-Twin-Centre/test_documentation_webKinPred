@@ -332,9 +332,88 @@ def _write_blank_similarity_columns(
         )
 
 
+def _compute_mmseqs_similarity(
+    sequences: list[str],
+    target_db: str,
+    temp_files_to_cleanup: list[str],
+) -> tuple[dict[str, float], dict[str, float]]:
+    """
+    Run MMseqs2 for ``sequences`` against ``target_db``.
+
+    Returns ``(sequence_to_max, sequence_to_mean)`` percent-identity dicts. The
+    query id map is built internally so this can be called with any subset of
+    sequences (e.g. only ReconXKG cache misses).
+    """
+    seq_to_unique_id: dict[str, str] = {}
+    for seq in sequences:
+        if seq and seq not in seq_to_unique_id:
+            seq_to_unique_id[seq] = f"useq{len(seq_to_unique_id)}"
+
+    if not seq_to_unique_id:
+        return {}, {}
+
+    query_fasta_path = create_fasta_file(list(seq_to_unique_id.keys()), seq_to_unique_id)
+    temp_files_to_cleanup.append(query_fasta_path)
+
+    query_dir = tempfile.mkdtemp(dir=TMP_DIR)
+    temp_files_to_cleanup.append(query_dir)
+    query_db = os.path.join(query_dir, "queryDB")
+    _run_mmseqs_command(_mmseqs_cmd("createdb", query_fasta_path, query_db))
+
+    result_dir = tempfile.mkdtemp(dir=TMP_DIR)
+    temp_files_to_cleanup.append(result_dir)
+    result_db = os.path.join(result_dir, "resultDB")
+    result_file = os.path.join(result_dir, "result.m8")
+
+    _run_mmseqs_command(
+        _mmseqs_cmd(
+            "search",
+            query_db,
+            target_db,
+            result_db,
+            result_dir,
+            "--max-seqs",
+            "1000",
+            "-s",
+            "7.5",
+            "-e",
+            "0.001",
+            "-v",
+            "0",
+        )
+    )
+    _run_mmseqs_command(
+        _mmseqs_cmd(
+            "convertalis",
+            query_db,
+            target_db,
+            result_db,
+            result_file,
+            "--format-output",
+            "query,target,pident",
+        )
+    )
+
+    unique_max_identity, unique_mean_identity = parse_mmseqs_results(
+        result_file,
+        query_fasta_path,
+    )
+
+    sequence_to_max = {
+        seq: round(float(unique_max_identity.get(unique_id, 0.0)), 2)
+        for seq, unique_id in seq_to_unique_id.items()
+    }
+    sequence_to_mean = {
+        seq: round(float(unique_mean_identity.get(unique_id, 0.0)), 2)
+        for seq, unique_id in seq_to_unique_id.items()
+    }
+    return sequence_to_max, sequence_to_mean
+
+
 def append_kcat_similarity_columns_to_output_csv(
     output_csv_path: str,
     kcat_method_key: str,
+    recon_xkg: bool = False,
 ) -> None:
     """
     Best-effort enrichment for completed kcat jobs.
@@ -343,7 +422,10 @@ def append_kcat_similarity_columns_to_output_csv(
       - mean similarity to {method} training data
       - max similarity to {method} training data
 
-    On any error, both columns are still created with blank values.
+    When ``recon_xkg`` is set, per-sequence similarity is served from the
+    persistent SimilarityStore and MMseqs2 runs only for sequences not yet
+    cached — so a fully cached job adds these columns without invoking MMseqs2 at
+    all. On any error, both columns are still created with blank values.
     """
     mean_col, max_col = _similarity_column_names(kcat_method_key)
     temp_files_to_cleanup: list[str] = []
@@ -363,72 +445,52 @@ def append_kcat_similarity_columns_to_output_csv(
 
         raw_sequences = [str(seq).strip() for seq in df["Protein Sequence"].fillna("").tolist()]
         unique_sequences: list[str] = []
-        seq_to_unique_id: dict[str, str] = {}
+        seen: set[str] = set()
         for seq in raw_sequences:
-            if not seq:
-                continue
-            if seq not in seq_to_unique_id:
-                seq_to_unique_id[seq] = f"useq{len(seq_to_unique_id)}"
+            if seq and seq not in seen:
+                seen.add(seq)
                 unique_sequences.append(seq)
 
         if not unique_sequences:
             raise ValueError("No non-empty protein sequences available for similarity analysis")
 
-        query_fasta_path = create_fasta_file(unique_sequences, seq_to_unique_id)
-        temp_files_to_cleanup.append(query_fasta_path)
+        sequence_to_max: dict[str, float] = {}
+        sequence_to_mean: dict[str, float] = {}
+        sequences_to_compute = unique_sequences
+        cache_label = dataset_label or kcat_method_key
+        store = None
+        seq_sha_by_seq: dict[str, str] = {}
 
-        query_dir = tempfile.mkdtemp(dir=TMP_DIR)
-        temp_files_to_cleanup.append(query_dir)
-        query_db = os.path.join(query_dir, "queryDB")
-        _run_mmseqs_command(_mmseqs_cmd("createdb", query_fasta_path, query_db))
+        if recon_xkg:
+            from api.services import prediction_store as store  # noqa: PLC0415
 
-        result_dir = tempfile.mkdtemp(dir=TMP_DIR)
-        temp_files_to_cleanup.append(result_dir)
-        result_db = os.path.join(result_dir, "resultDB")
-        result_file = os.path.join(result_dir, "result.m8")
+            seq_sha_by_seq = {seq: store.sha256_text(seq) for seq in unique_sequences}
+            cached = store.get_similarity_many(seq_sha_by_seq, cache_label)
+            for seq, (mean_sim, max_sim) in cached.items():
+                sequence_to_mean[seq] = 0.0 if mean_sim is None else mean_sim
+                sequence_to_max[seq] = 0.0 if max_sim is None else max_sim
+            sequences_to_compute = [seq for seq in unique_sequences if seq not in cached]
 
-        _run_mmseqs_command(
-            _mmseqs_cmd(
-                "search",
-                query_db,
-                target_db,
-                result_db,
-                result_dir,
-                "--max-seqs",
-                "1000",
-                "-s",
-                "7.5",
-                "-e",
-                "0.001",
-                "-v",
-                "0",
+        if sequences_to_compute:
+            computed_max, computed_mean = _compute_mmseqs_similarity(
+                sequences_to_compute, target_db, temp_files_to_cleanup
             )
-        )
-        _run_mmseqs_command(
-            _mmseqs_cmd(
-                "convertalis",
-                query_db,
-                target_db,
-                result_db,
-                result_file,
-                "--format-output",
-                "query,target,pident",
-            )
-        )
+            sequence_to_max.update(computed_max)
+            sequence_to_mean.update(computed_mean)
 
-        unique_max_identity, unique_mean_identity = parse_mmseqs_results(
-            result_file,
-            query_fasta_path,
-        )
-
-        sequence_to_max = {
-            seq: round(float(unique_max_identity.get(unique_id, 0.0)), 2)
-            for seq, unique_id in seq_to_unique_id.items()
-        }
-        sequence_to_mean = {
-            seq: round(float(unique_mean_identity.get(unique_id, 0.0)), 2)
-            for seq, unique_id in seq_to_unique_id.items()
-        }
+            if recon_xkg and store is not None:
+                store.upsert_similarity_many(
+                    [
+                        (
+                            seq,
+                            seq_sha_by_seq[seq],
+                            computed_mean.get(seq, 0.0),
+                            computed_max.get(seq, 0.0),
+                        )
+                        for seq in sequences_to_compute
+                    ],
+                    cache_label,
+                )
 
         mean_values: list[float | str] = []
         max_values: list[float | str] = []
