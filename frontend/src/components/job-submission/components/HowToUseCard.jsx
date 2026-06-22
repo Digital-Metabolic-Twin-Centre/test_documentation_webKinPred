@@ -198,7 +198,7 @@ export default function HowToUseCard({ methods = {} }) {
           <ExclamationTriangle size={24} className="me-3 howto-limit-icon" />
           <div>
             <strong>Single-substrate methods also accept Multi-Substrate and Full-Reaction files.</strong>{' '}
-            They predict every semicolon-separated substrate independently: k<sub>cat</sub> uses the maximum prediction.
+            They predict every semicolon-separated substrate independently: k<sub>cat</sub> is set to the maximum prediction.
           </div>
         </Alert>
 
