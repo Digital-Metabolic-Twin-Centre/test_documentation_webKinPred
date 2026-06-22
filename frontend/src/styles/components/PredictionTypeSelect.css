@@ -94,9 +94,10 @@
 }
 
 /* 6. The dropdown menu itself */
-.kave-select option {
-  background: var(--primary-color); /* Dark background */
-  color: var(--text-color); /* Light text */
+.kave-select option,
+.kave-select optgroup {
+  background: var(--primary-color); /* Theme-aware background */
+  color: var(--text-color); /* Theme-aware text */
 }
 
 /* Multi-target selector (checkbox chips) */
