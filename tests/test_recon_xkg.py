@@ -107,7 +107,7 @@ class LookupKeyTests(unittest.TestCase):
             store.params_fingerprint(True, {"kinetics_type": "KM"}),
         )
 
-    def test_invalid_sequence_is_uncacheable(self):
+    def test_invalid_sequence_receives_a_cache_key_but_empty_sequence_does_not(self):
         desc = _FakeDesc(col_to_kwarg={"Substrate": "substrates"})
         keys, components, _fingerprint = store.build_unit_keys(
             desc,
@@ -117,8 +117,30 @@ class LookupKeyTests(unittest.TestCase):
             True,
         )
         self.assertIsNotNone(keys[0])
-        self.assertEqual(keys[1:], [None, None])
-        self.assertEqual(components[1:], [None, None])
+        self.assertIsNotNone(keys[1])
+        self.assertIsNotNone(components[1])
+        self.assertIsNone(keys[2])
+        self.assertIsNone(components[2])
+
+    def test_invalid_chemistry_uses_a_stable_non_reversible_fallback(self):
+        desc = _FakeDesc(col_to_kwarg={"Substrate": "substrates"})
+        first = store.build_unit_keys(
+            desc,
+            "kcat",
+            ["MAAA"],
+            {"substrates": ["not-a-molecule"]},
+            True,
+        )
+        second = store.build_unit_keys(
+            desc,
+            "kcat",
+            ["MAAA"],
+            {"substrates": ["not-a-molecule"]},
+            True,
+        )
+        self.assertEqual(first[0], second[0])
+        self.assertTrue(first[1][0][1].startswith("raw-sha256:"))
+        self.assertNotIn("not-a-molecule", first[1][0][1])
 
 
 class CoerceTests(unittest.TestCase):
@@ -134,6 +156,20 @@ class CoerceTests(unittest.TestCase):
             self.assertTrue(coerce_recon_xkg(truthy), truthy)
         for falsy in ("false", "0", "no", "", None, "anything"):
             self.assertFalse(coerce_recon_xkg(falsy), falsy)
+
+    def test_only_deterministic_input_failures_are_negative_cacheable(self):
+        self.assertTrue(
+            store.is_cacheable_failure_reason(
+                "Invalid protein sequence (unsupported amino acid characters)"
+            )
+        )
+        self.assertTrue(
+            store.is_cacheable_failure_reason(
+                "Invalid product (not a valid SMILES or InChI)"
+            )
+        )
+        self.assertFalse(store.is_cacheable_failure_reason("Prediction could not be made"))
+        self.assertFalse(store.is_cacheable_failure_reason("Prediction output missing"))
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +190,7 @@ class CacheWrapperTests(unittest.TestCase):
         import api.tasks as tasks
 
         self.tasks = tasks
-        self._mem: dict[str, float] = {}
+        self._mem: dict[str, object] = {}
         self.engine_calls: list[list[str]] = []
 
         # In-memory fake store backing get_many / upsert_many.
@@ -163,7 +199,10 @@ class CacheWrapperTests(unittest.TestCase):
 
         def fake_upsert_many(rows):
             for row in rows:
-                self._mem[row["lookup_key"]] = row["value"]
+                reason = row.get("failure_reason")
+                self._mem[row["lookup_key"]] = (
+                    store.CachedFailure(reason) if reason else row["value"]
+                )
             return len(rows)
 
         # Spy engine: returns a deterministic value per substrate and records
@@ -250,6 +289,45 @@ class CacheWrapperTests(unittest.TestCase):
         self.assertEqual(preds[1], 3.0)
         self.assertEqual(len(preds), 3)
 
+    def test_deterministic_validation_failure_is_cached_and_replayed(self):
+        reason = "Invalid protein sequence (unsupported amino acid characters)"
+
+        def invalid_engine(desc, sequences, public_id, target, **kwargs):
+            self.engine_calls.append(list(sequences))
+            return [None] * len(sequences), {index: reason for index in range(len(sequences))}
+
+        self.tasks._run_method_engine = invalid_engine
+        predictions, invalid, stats = self._invoke(["CCO"], sequences=["MAAX"])
+        self.assertEqual(predictions, [None])
+        self.assertEqual(invalid, {0: reason})
+        self.assertEqual(stats["misses"], 1)
+        self.assertEqual(len(self.engine_calls), 1)
+
+        self.engine_calls.clear()
+        predictions, invalid, stats = self._invoke(["CCO"], sequences=["MAAX"])
+        self.assertEqual(predictions, [None])
+        self.assertEqual(invalid, {0: reason})
+        self.assertEqual(stats["hits"], 1)
+        self.assertEqual(stats["misses"], 0)
+        self.assertEqual(self.engine_calls, [])
+
+    def test_transient_row_failure_is_not_negative_cached(self):
+        reason = "Prediction could not be made"
+
+        def failed_engine(desc, sequences, public_id, target, **kwargs):
+            self.engine_calls.append(list(sequences))
+            return [None] * len(sequences), {0: reason}
+
+        self.tasks._run_method_engine = failed_engine
+        _predictions, invalid, _stats = self._invoke(["CCO"])
+        self.assertEqual(invalid, {0: reason})
+        self.engine_calls.clear()
+
+        _predictions, invalid, stats = self._invoke(["CCO"])
+        self.assertEqual(invalid, {0: reason})
+        self.assertEqual(stats["misses"], 1)
+        self.assertEqual(len(self.engine_calls), 1)
+
     def test_cache_only_snapshot_never_reads_store_or_invokes_engine(self):
         desc = _FakeDesc(
             col_to_kwarg={"Substrate": "substrates"},
@@ -306,6 +384,35 @@ class CacheWrapperTests(unittest.TestCase):
                 cache_only=True,
                 substrates=["CCO"],
             )
+        self.assertEqual(self.engine_calls, [])
+
+    def test_cache_only_snapshot_replays_negative_hit_without_engine(self):
+        reason = "Invalid substrate (not a valid SMILES or InChI)"
+        desc = _FakeDesc(
+            col_to_kwarg={"Substrate": "substrates"},
+            target_kwargs={"kcat": {}},
+        )
+        keys, _components, _fingerprint = self.tasks._recon_xkg_unit_keys(
+            desc,
+            "kcat",
+            ["MAAA"],
+            {"substrates": ["not-a-molecule"]},
+            True,
+        )
+        self.engine_calls.clear()
+        predictions, invalid = self.tasks._invoke_method_prediction(
+            desc,
+            ["MAAA"],
+            "job1",
+            "kcat",
+            canonicalize_substrates=True,
+            recon_xkg=True,
+            cache_snapshot={keys[0]: store.CachedFailure(reason)},
+            cache_only=True,
+            substrates=["not-a-molecule"],
+        )
+        self.assertEqual(predictions, [None])
+        self.assertEqual(invalid, {0: reason})
         self.assertEqual(self.engine_calls, [])
 
 

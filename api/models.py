@@ -319,12 +319,12 @@ class PredictionStore(models.Model):
     """
     Append/upsert memoization of a single raw model prediction unit.
 
-    One row caches the raw predicted value for one prediction unit, where a unit
-    is (post-truncation sequence, canonical substrate(s), canonical products,
-    target, method, model version, params fingerprint). The value stored is the
-    *raw* model output (before RealKcat class-range formatting, substrate
-    reduction, or experimental overrides) so downstream assembly is identical to
-    a freshly computed row.
+    One row caches either the raw predicted value or a deterministic row-level
+    validation failure for one prediction unit. A unit is (post-truncation
+    sequence, canonical substrate(s), canonical products, target, method, model
+    version, params fingerprint). Successful values are stored before RealKcat
+    formatting, substrate reduction, or experimental overrides so downstream
+    assembly is identical to a freshly computed row.
 
     Routed to the dedicated ``prediction_store`` database (see
     api/dbrouters.py). ``lookup_key`` is a SHA-256 hex digest over all
@@ -341,7 +341,8 @@ class PredictionStore(models.Model):
     sequence_sha256 = models.CharField(max_length=64)
     substrate_canon = models.TextField()
     products_canon = models.TextField(blank=True, default="")
-    value = models.FloatField()
+    value = models.FloatField(null=True, blank=True)
+    failure_reason = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(default=timezone.now)
 
@@ -351,6 +352,15 @@ class PredictionStore(models.Model):
         indexes = [
             models.Index(fields=["model_version"], name="predstore_modelver_idx"),
             models.Index(fields=["method", "target"], name="predstore_method_tgt_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(value__isnull=False, failure_reason="")
+                    | (models.Q(value__isnull=True) & ~models.Q(failure_reason=""))
+                ),
+                name="predstore_value_or_failure",
+            )
         ]
 
     def __str__(self):

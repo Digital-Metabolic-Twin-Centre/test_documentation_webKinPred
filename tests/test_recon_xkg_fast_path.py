@@ -178,6 +178,29 @@ class PreflightTests(unittest.TestCase):
             self.assertFalse(result.complete)
             self.assertEqual(result.reason, expected_reason)
 
+    def test_negative_prediction_outcome_satisfies_preflight(self):
+        from api.services.prediction_store import CachedFailure
+
+        reason = "Invalid protein sequence (unsupported amino acid characters)"
+        with patch(
+            "api.services.recon_xkg_preflight_service.prediction_store.build_unit_keys",
+            return_value=(["a", "b", "a"], [None] * 3, "fp"),
+        ), patch(
+            "api.services.recon_xkg_preflight_service.prediction_store.get_many",
+            return_value={"a": 1.0, "b": CachedFailure(reason)},
+        ):
+            result = preflight_recon_xkg_cache(
+                dataframe=self.dataframe,
+                targets=["kcat"],
+                descriptors={"kcat": self.descriptor},
+                handle_long_sequences="truncate",
+                canonicalize_substrates=True,
+                include_similarity_columns=False,
+                job_public_id="job-1",
+            )
+        self.assertTrue(result.complete)
+        self.assertEqual(result.snapshot.predictions["b"], CachedFailure(reason))
+
     def test_missing_similarity_or_cache_exception_forces_queue_path(self):
         with patch(
             "api.services.recon_xkg_preflight_service.prediction_store.build_unit_keys",

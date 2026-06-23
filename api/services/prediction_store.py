@@ -14,10 +14,10 @@ Design notes
   than at the (row, target) level. This is what makes Km / kcat-Km ordered-array
   outputs correct under substrate reordering: per-substrate units are looked up
   individually and reassembled in the caller's input order.
-* We store the **raw** model output (before RealKcat class-range formatting,
-  substrate reduction, or experimental overrides). Everything downstream of the
-  model runs unchanged on merged hit+miss values, so a cached row is
-  byte-for-byte identical to a freshly predicted one.
+* We store either the **raw** model output (before RealKcat formatting,
+  substrate reduction, or experimental overrides) or a deterministic row-level
+  validation failure. Everything downstream runs unchanged on reconstructed
+  outcomes, so cached rows remain byte-for-byte identical to fresh rows.
 * Every operation is best-effort: any failure logs and degrades to normal
   computation rather than raising into the prediction pipeline.
 """
@@ -25,9 +25,11 @@ Design notes
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import math
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from functools import lru_cache
 from numbers import Real
 from typing import Any
@@ -49,6 +51,14 @@ _IN_CHUNK = 900
 # Field separator for hash inputs — a control char that cannot appear in SMILES,
 # method names, or hex digests, so distinct field tuples never collide.
 _SEP = "\x1f"
+_RAW_UNIT_PREFIX = "raw-sha256:"
+
+
+@dataclass(frozen=True)
+class CachedFailure:
+    """A deterministic row-level validation failure stored as a cache hit."""
+
+    reason: str
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +167,25 @@ def make_lookup_key(
     )
 
 
+def _cache_unit_component(value: Any, canonicalize: bool) -> str:
+    """Return the normal canonical unit or a non-reversible raw fallback."""
+    canonical = canonical_unit(value, canonicalize)
+    if canonical is not None:
+        return canonical
+
+    if isinstance(value, (list, tuple)):
+        kind = type(value).__name__
+        tokens = [str(token).strip() for token in value]
+    elif isinstance(value, str):
+        kind = "str"
+        tokens = [token.strip() for token in value.split(";") if token.strip()]
+    else:
+        kind = type(value).__name__
+        tokens = [str(value)]
+    payload = json.dumps([kind, tokens], ensure_ascii=False, separators=(",", ":"))
+    return _RAW_UNIT_PREFIX + sha256_text(payload)
+
+
 def build_unit_keys(
     descriptor: Any,
     target: str,
@@ -182,38 +211,24 @@ def build_unit_keys(
     components: list[tuple[str, str, str] | None] = [None] * count
     for index in range(count):
         sequence = sequences[index]
-        if sequence is None:
-            continue
-        sequence_text = str(sequence).strip()
-        if not sequence_text or any(
-            residue not in "ACDEFGHIKLMNPQRSTVWY" for residue in sequence_text
-        ):
+        if not isinstance(sequence, str) or not sequence.strip():
             continue
 
-        substrate = (
-            substrate_values[index]
-            if isinstance(substrate_values, (list, tuple))
-            and index < len(substrate_values)
-            else None
-        )
-        if substrate is None:
+        if not isinstance(substrate_values, (list, tuple)) or index >= len(substrate_values):
             continue
-        substrate_canon = canonical_unit(substrate, canonicalize_substrates)
-        if substrate_canon is None:
-            continue
+        substrate = substrate_values[index]
+        substrate_canon = _cache_unit_component(substrate, canonicalize_substrates)
 
         products_canon = ""
         if product_values is not None:
-            products = (
-                product_values[index]
-                if isinstance(product_values, (list, tuple))
-                and index < len(product_values)
-                else None
-            )
+            if not isinstance(product_values, (list, tuple)) or index >= len(product_values):
+                continue
+            products = product_values[index]
             if products is not None and str(products).strip():
-                products_canon = canonical_unit(products, canonicalize_substrates)
-                if products_canon is None:
-                    continue
+                products_canon = _cache_unit_component(
+                    products,
+                    canonicalize_substrates,
+                )
 
         sequence_sha = sha256_text(str(sequence))
         keys[index] = make_lookup_key(
@@ -252,18 +267,40 @@ def coerce_value(raw: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def cached_outcome_is_valid(raw: Any) -> bool:
+    """Return whether ``raw`` is a usable positive or negative cache hit."""
+    if isinstance(raw, CachedFailure):
+        return bool(raw.reason.strip())
+    return coerce_value(raw) is not None
+
+
+def is_cacheable_failure_reason(reason: Any) -> bool:
+    """Return whether an engine error is a deterministic input rejection."""
+    text = str(reason or "").strip()
+    return text.startswith(
+        (
+            "Invalid protein sequence",
+            "Invalid substrate",
+            "Invalid product",
+            "Invalid substrate component:",
+            "Missing protein sequence",
+            "Substrate contains multiple disconnected fragments",
+        )
+    )
+
+
 # ---------------------------------------------------------------------------
 # Prediction-unit cache I/O
 # ---------------------------------------------------------------------------
 
 
-def get_many(keys: Iterable[str]) -> dict[str, float]:
+def get_many(keys: Iterable[str]) -> dict[str, float | CachedFailure]:
     """
     Batch-fetch cached prediction values for ``keys``.
 
-    Returns a ``{lookup_key: value}`` dict containing only the hits. Reads are
-    chunked to stay within SQLite's host-parameter limit. Best-effort: any error
-    returns an empty dict (callers then treat everything as a miss).
+    Returns positive values or ``CachedFailure`` objects keyed by lookup key.
+    Malformed rows are ignored. Reads are chunked to stay within SQLite's host-
+    parameter limit. Best-effort: any error returns an empty dict.
     """
     from api.models import PredictionStore
 
@@ -271,15 +308,21 @@ def get_many(keys: Iterable[str]) -> dict[str, float]:
     if not unique_keys:
         return {}
 
-    hits: dict[str, float] = {}
+    hits: dict[str, float | CachedFailure] = {}
     try:
         for start in range(0, len(unique_keys), _IN_CHUNK):
             chunk = unique_keys[start : start + _IN_CHUNK]
             rows = PredictionStore.objects.filter(lookup_key__in=chunk).values_list(
-                "lookup_key", "value"
+                "lookup_key", "value", "failure_reason"
             )
-            for lookup_key, value in rows:
-                hits[lookup_key] = value
+            for lookup_key, value, failure_reason in rows:
+                reason = str(failure_reason or "").strip()
+                if reason:
+                    hits[lookup_key] = CachedFailure(reason)
+                    continue
+                numeric_value = coerce_value(value)
+                if numeric_value is not None:
+                    hits[lookup_key] = numeric_value
     except Exception:
         _log.warning(
             "ReconXKG prediction cache read failed; treating as full miss",
@@ -294,13 +337,29 @@ def upsert_many(rows: Sequence[dict[str, Any]]) -> int:
     """
     Append/overwrite prediction-unit rows by ``lookup_key`` (write-through).
 
-    ``rows`` is a list of dicts with the full set of store columns. Uses a single
-    ``INSERT ... ON CONFLICT(lookup_key) DO UPDATE`` statement so concurrent jobs
-    that compute the same miss converge on one row. Best-effort.
+    A row contains either a finite ``value`` or a non-empty ``failure_reason``.
+    Uses one ``INSERT ... ON CONFLICT(lookup_key) DO UPDATE`` statement so
+    concurrent jobs that resolve the same miss converge on one outcome.
     """
     from api.models import PredictionStore
 
     if not rows:
+        return 0
+
+    normalised_rows: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        lookup_key = row.get("lookup_key")
+        reason = str(row.get("failure_reason") or "").strip()
+        value = None if reason else coerce_value(row.get("value"))
+        if not lookup_key or (value is None and not reason):
+            continue
+        normalised_rows[str(lookup_key)] = {
+            **row,
+            "lookup_key": str(lookup_key),
+            "value": value,
+            "failure_reason": reason,
+        }
+    if not normalised_rows:
         return 0
 
     now = timezone.now()
@@ -315,17 +374,18 @@ def upsert_many(rows: Sequence[dict[str, Any]]) -> int:
             substrate_canon=row["substrate_canon"],
             products_canon=row.get("products_canon", ""),
             value=row["value"],
+            failure_reason=row["failure_reason"],
             created_at=now,
             updated_at=now,
         )
-        for row in rows
+        for row in normalised_rows.values()
     ]
     try:
         PredictionStore.objects.bulk_create(
             objects,
             update_conflicts=True,
             unique_fields=["lookup_key"],
-            update_fields=["value", "updated_at"],
+            update_fields=["value", "failure_reason", "updated_at"],
         )
     except Exception:
         _log.warning(

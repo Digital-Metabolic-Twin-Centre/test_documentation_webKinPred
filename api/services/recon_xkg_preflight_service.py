@@ -24,7 +24,7 @@ _log = logging.getLogger(__name__)
 class ReconXkgCacheSnapshot:
     """Values captured by a successful full-cache preflight."""
 
-    predictions: dict[str, float]
+    predictions: dict[str, Any]
     similarities: dict[str, tuple[float | None, float | None]]
 
 
@@ -94,7 +94,7 @@ def preflight_recon_xkg_cache(
         prediction_values = prediction_store.get_many(unique_keys)
         if any(
             key not in prediction_values
-            or prediction_store.coerce_value(prediction_values[key]) is None
+            or not prediction_store.cached_outcome_is_valid(prediction_values[key])
             for key in unique_keys
         ):
             reason = "prediction-cache-miss"

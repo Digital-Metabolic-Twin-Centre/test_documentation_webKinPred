@@ -359,7 +359,7 @@ def execute_multi_prediction_job(
     include_similarity_columns: bool = True,
     disable_gpu_precompute: bool = False,
     recon_xkg: bool = False,
-    prediction_cache_snapshot: dict[str, float] | None = None,
+    prediction_cache_snapshot: dict[str, Any] | None = None,
     similarity_cache_snapshot: dict[
         str, tuple[float | None, float | None]
     ] | None = None,
@@ -437,7 +437,7 @@ def _execute_multi_prediction(
     include_similarity_columns: bool = True,
     disable_gpu_precompute: bool = False,
     recon_xkg: bool = False,
-    prediction_cache_snapshot: dict[str, float] | None = None,
+    prediction_cache_snapshot: dict[str, Any] | None = None,
     similarity_cache_snapshot: dict[
         str, tuple[float | None, float | None]
     ] | None = None,
@@ -578,7 +578,7 @@ def _execute_target_batch(
     extra_call_kwargs: dict[str, Any],
     recon_xkg: bool = False,
     cache_stats: dict[str, int] | None = None,
-    prediction_cache_snapshot: dict[str, float] | None = None,
+    prediction_cache_snapshot: dict[str, Any] | None = None,
     cache_only: bool = False,
 ) -> dict[str, Any]:
     """Execute one method/target either natively or as an expanded child batch."""
@@ -706,7 +706,7 @@ def _execute_native_target_batch(
     apply_experimental_overrides: bool = True,
     recon_xkg: bool = False,
     cache_stats: dict[str, int] | None = None,
-    prediction_cache_snapshot: dict[str, float] | None = None,
+    prediction_cache_snapshot: dict[str, Any] | None = None,
     cache_only: bool = False,
 ) -> dict[str, Any]:
     n_rows = len(sequences)
@@ -959,7 +959,7 @@ def _invoke_method_prediction(
     disable_gpu_precompute: bool = False,
     recon_xkg: bool = False,
     cache_stats: dict[str, int] | None = None,
-    cache_snapshot: dict[str, float] | None = None,
+    cache_snapshot: dict[str, Any] | None = None,
     cache_only: bool = False,
     **call_kwargs,
 ) -> tuple[list, dict[int, str]]:
@@ -1065,9 +1065,11 @@ def _recon_xkg_unit_keys(
 
     Returns ``(keys, components, params_fp)`` where, for each input position:
       - ``keys[i]`` is the lookup key, or None if the unit is uncacheable
-        (missing/unparseable sequence or substrate/products);
+        because required aligned input is structurally absent;
       - ``components[i]`` is ``(sequence_sha256, substrate_canon, products_canon)``
-        retained so a freshly computed miss can be written back without recompute.
+        retained so a freshly computed value or deterministic validation failure
+        can be written back without recomputing the key. Invalid chemistry uses
+        a non-reversible raw fingerprint in the component.
     """
     from api.services import prediction_store as store
 
@@ -1089,7 +1091,7 @@ def _invoke_method_prediction_cached(
     canonicalize_substrates: bool,
     disable_gpu_precompute: bool,
     cache_stats: dict[str, int] | None,
-    cache_snapshot: dict[str, float] | None,
+    cache_snapshot: dict[str, Any] | None,
     cache_only: bool,
     call_kwargs: dict[str, Any],
 ) -> tuple[list, dict[int, str]]:
@@ -1114,11 +1116,15 @@ def _invoke_method_prediction_cached(
     miss_indices: list[int] = []
     hit_count = 0
     for i, key in enumerate(keys):
-        if key and key in cached:
-            predictions[i] = cached[key]
-            hit_count += 1
-        else:
+        outcome = cached.get(key) if key else None
+        if not store.cached_outcome_is_valid(outcome):
             miss_indices.append(i)
+            continue
+        hit_count += 1
+        if isinstance(outcome, store.CachedFailure):
+            invalid[i] = outcome.reason
+        else:
+            predictions[i] = store.coerce_value(outcome)
 
     if cache_only and miss_indices:
         raise ReconXkgCacheOnlyMiss(
@@ -1150,11 +1156,32 @@ def _invoke_method_prediction_cached(
         rows_to_store: list[dict[str, Any]] = []
         for local_index, global_index in enumerate(miss_indices):
             predictions[global_index] = miss_preds[local_index]
-            if local_index in miss_invalid:
-                invalid[global_index] = miss_invalid[local_index]
-                continue
             key = keys[global_index]
             component = components[global_index]
+            if local_index in miss_invalid:
+                reason = miss_invalid[local_index]
+                invalid[global_index] = reason
+                if (
+                    key
+                    and component is not None
+                    and store.is_cacheable_failure_reason(reason)
+                ):
+                    seq_sha, sub_canon, products_canon = component
+                    rows_to_store.append(
+                        {
+                            "lookup_key": key,
+                            "target": target,
+                            "method": desc.key,
+                            "model_version": model_version,
+                            "params_fingerprint": params_fp,
+                            "sequence_sha256": seq_sha,
+                            "substrate_canon": sub_canon,
+                            "products_canon": products_canon,
+                            "value": None,
+                            "failure_reason": reason,
+                        }
+                    )
+                continue
             if not key or component is None:
                 continue  # uncacheable unit — never written back
             value = store.coerce_value(miss_preds[local_index])
@@ -1172,6 +1199,7 @@ def _invoke_method_prediction_cached(
                     "substrate_canon": sub_canon,
                     "products_canon": products_canon,
                     "value": value,
+                    "failure_reason": "",
                 }
             )
         store.upsert_many(rows_to_store)
