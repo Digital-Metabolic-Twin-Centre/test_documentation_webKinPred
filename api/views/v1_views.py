@@ -314,11 +314,10 @@ def api_submit_job(request):
 
     On success, returns a JSON object with:
       - jobId       — use this to poll /status/ and download /result/
-      - status      — Pending, or Completed for an authorized full-cache ReconXKG hit
+      - status      — Pending; poll statusUrl for the current persisted job state
       - statusUrl   — convenience URL for polling
       - resultUrl   — convenience URL for downloading results
       - quota       — your remaining quota after this submission
-      - result      — inline result envelope, present only for immediate completion
     """
     if request.method != "POST":
         return _json_error("This endpoint only accepts POST requests.", 405)
@@ -358,10 +357,9 @@ def api_submit_job(request):
 
     public_id = success_data["public_id"]
 
-    completed = bool(success_data.get("completed_immediately"))
     response_data = {
         "jobId": public_id,
-        "status": "Completed" if completed else "Pending",
+        "status": "Pending",
         "statusUrl": f"/api/v1/status/{public_id}/",
         "resultUrl": f"/api/v1/result/{public_id}/",
         "quota": _quota_dict(
@@ -369,13 +367,6 @@ def api_submit_job(request):
             daily_limit=request.api_daily_limit,
         ),
     }
-    if completed:
-        try:
-            completed_job = Job.objects.get(public_id=public_id)
-            response_data["result"] = serialize_result_csv(completed_job.output_file.path)
-        except Exception as exc:
-            return _json_error(f"Could not read completed output file: {exc}", status=500)
-
     return JsonResponse(response_data, status=201)
 
 
