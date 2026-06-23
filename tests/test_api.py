@@ -1692,7 +1692,16 @@ def test_recon_xkg_transparency(
     )
     label = f"recon_xkg/{kcat_method}/recon"
     if check(f"[{label}] submit 201", response.status_code == 201, f"got {response.status_code}"):
-        job_id = response.json().get("jobId")
+        submitted = response.json()
+        job_id = submitted.get("jobId")
+        if submitted.get("status") == "Completed":
+            inline = submitted.get("result") or {}
+            check(f"[{label}] immediate result included", bool(inline))
+            check(
+                f"[{label}] immediate result has rows",
+                isinstance(inline.get("rowCount"), int) and inline["rowCount"] > 0,
+                f"got {inline.get('rowCount')}",
+            )
         final_status = wait_for_terminal_status(base, headers, job_id, label, poll_timeout)
         if check(f"[{label}] completed", final_status == "Completed", f"got {final_status}"):
             result_response = requests.get(f"{base}/result/{job_id}/?format=json", headers=headers)

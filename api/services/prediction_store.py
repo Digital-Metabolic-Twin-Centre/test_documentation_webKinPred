@@ -27,11 +27,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
+from collections.abc import Iterable, Sequence
 from functools import lru_cache
 from numbers import Real
-from typing import Any, Iterable, Sequence
-
-from django.utils import timezone
+from typing import Any
 
 from api.utils.convert_to_mol import (
     clean_molecule_text,
@@ -39,6 +38,7 @@ from api.utils.convert_to_mol import (
     substrate_as_smiles,
 )
 from api.utils.substrate_expansion import split_substrate_list
+from django.utils import timezone
 
 _log = logging.getLogger(__name__)
 
@@ -155,6 +155,79 @@ def make_lookup_key(
             ]
         )
     )
+
+
+def build_unit_keys(
+    descriptor: Any,
+    target: str,
+    sequences: Sequence[Any],
+    call_kwargs: dict[str, Any],
+    canonicalize_substrates: bool,
+) -> tuple[list[str | None], list[tuple[str, str, str] | None], str]:
+    """Build position-aligned ReconXKG keys for one planned engine batch."""
+    count = len(sequences)
+    model_version = getattr(descriptor, "model_version", "1")
+    params_fp = params_fingerprint(
+        canonicalize_substrates,
+        descriptor.target_kwargs.get(target, {}),
+    )
+    substrate_kwarg = descriptor.col_to_kwarg.get(
+        "Substrate"
+    ) or descriptor.col_to_kwarg.get("Substrates")
+    products_kwarg = descriptor.col_to_kwarg.get("Products")
+    substrate_values = call_kwargs.get(substrate_kwarg) if substrate_kwarg else None
+    product_values = call_kwargs.get(products_kwarg) if products_kwarg else None
+
+    keys: list[str | None] = [None] * count
+    components: list[tuple[str, str, str] | None] = [None] * count
+    for index in range(count):
+        sequence = sequences[index]
+        if sequence is None:
+            continue
+        sequence_text = str(sequence).strip()
+        if not sequence_text or any(
+            residue not in "ACDEFGHIKLMNPQRSTVWY" for residue in sequence_text
+        ):
+            continue
+
+        substrate = (
+            substrate_values[index]
+            if isinstance(substrate_values, (list, tuple))
+            and index < len(substrate_values)
+            else None
+        )
+        if substrate is None:
+            continue
+        substrate_canon = canonical_unit(substrate, canonicalize_substrates)
+        if substrate_canon is None:
+            continue
+
+        products_canon = ""
+        if product_values is not None:
+            products = (
+                product_values[index]
+                if isinstance(product_values, (list, tuple))
+                and index < len(product_values)
+                else None
+            )
+            if products is not None and str(products).strip():
+                products_canon = canonical_unit(products, canonicalize_substrates)
+                if products_canon is None:
+                    continue
+
+        sequence_sha = sha256_text(str(sequence))
+        keys[index] = make_lookup_key(
+            target=target,
+            method=descriptor.key,
+            model_version=model_version,
+            params_fp=params_fp,
+            sequence_sha256=sequence_sha,
+            substrate_canon=substrate_canon,
+            products_canon=products_canon,
+        )
+        components[index] = (sequence_sha, substrate_canon, products_canon)
+
+    return keys, components, params_fp
 
 
 def coerce_value(raw: Any) -> float | None:

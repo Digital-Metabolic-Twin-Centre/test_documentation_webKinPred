@@ -30,7 +30,6 @@ django.setup()
 from api.services import prediction_store as store  # noqa: E402
 from api.utils.recon_xkg import coerce_recon_xkg  # noqa: E402
 
-
 # ---------------------------------------------------------------------------
 # Keying / canonicalization
 # ---------------------------------------------------------------------------
@@ -107,6 +106,19 @@ class LookupKeyTests(unittest.TestCase):
             store.params_fingerprint(True, {"kinetics_type": "KCAT"}),
             store.params_fingerprint(True, {"kinetics_type": "KM"}),
         )
+
+    def test_invalid_sequence_is_uncacheable(self):
+        desc = _FakeDesc(col_to_kwarg={"Substrate": "substrates"})
+        keys, components, _fingerprint = store.build_unit_keys(
+            desc,
+            "kcat",
+            ["MAAA", "INVALIDX", ""],
+            {"substrates": ["CCO", "CCO", "CCO"]},
+            True,
+        )
+        self.assertIsNotNone(keys[0])
+        self.assertEqual(keys[1:], [None, None])
+        self.assertEqual(components[1:], [None, None])
 
 
 class CoerceTests(unittest.TestCase):
@@ -237,6 +249,64 @@ class CacheWrapperTests(unittest.TestCase):
         # Spy returns len(substrate); cached CCO == 3.0 must land at index 1.
         self.assertEqual(preds[1], 3.0)
         self.assertEqual(len(preds), 3)
+
+    def test_cache_only_snapshot_never_reads_store_or_invokes_engine(self):
+        desc = _FakeDesc(
+            col_to_kwarg={"Substrate": "substrates"},
+            target_kwargs={"kcat": {}},
+        )
+        keys, _components, _fingerprint = self.tasks._recon_xkg_unit_keys(
+            desc,
+            "kcat",
+            ["MAAA", "MAAA"],
+            {"substrates": ["CCO", "O"]},
+            True,
+        )
+        snapshot = {keys[0]: 3.0, keys[1]: 1.0}
+
+        import api.services.prediction_store as prediction_store
+
+        original_get_many = prediction_store.get_many
+        prediction_store.get_many = lambda _keys: self.fail("cache-only mode read the store")
+        self.engine_calls.clear()
+        try:
+            predictions, invalid = self.tasks._invoke_method_prediction(
+                desc,
+                ["MAAA", "MAAA"],
+                "job1",
+                "kcat",
+                canonicalize_substrates=True,
+                recon_xkg=True,
+                cache_snapshot=snapshot,
+                cache_only=True,
+                substrates=["CCO", "O"],
+            )
+        finally:
+            prediction_store.get_many = original_get_many
+
+        self.assertEqual(predictions, [3.0, 1.0])
+        self.assertEqual(invalid, {})
+        self.assertEqual(self.engine_calls, [])
+
+    def test_cache_only_snapshot_missing_value_raises_without_engine(self):
+        desc = _FakeDesc(
+            col_to_kwarg={"Substrate": "substrates"},
+            target_kwargs={"kcat": {}},
+        )
+        self.engine_calls.clear()
+        with self.assertRaises(self.tasks.ReconXkgCacheOnlyMiss):
+            self.tasks._invoke_method_prediction(
+                desc,
+                ["MAAA"],
+                "job1",
+                "kcat",
+                canonicalize_substrates=True,
+                recon_xkg=True,
+                cache_snapshot={},
+                cache_only=True,
+                substrates=["CCO"],
+            )
+        self.assertEqual(self.engine_calls, [])
 
 
 if __name__ == "__main__":

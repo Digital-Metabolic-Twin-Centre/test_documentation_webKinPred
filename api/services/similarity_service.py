@@ -10,11 +10,12 @@ import tempfile
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
-
+from api.methods.base import PredictionError
 from api.services.progress_service import push_line
 from api.utils.similarity_config import SIMILARITY_DATASETS, TARGET_DBS
 from api.utils.similarity_utils import (
     TMP_DIR,
+    _mmseqs_cmd,
     calculate_average_similarity,
     calculate_identity_histogram,
     cleanup_temporary_files,
@@ -26,10 +27,13 @@ from api.utils.similarity_utils import (
     parse_mmseqs_results,
     parse_mmseqs_results_raw,
     run_mmseqs_search,
-    _mmseqs_cmd,
 )
 
 _log = logging.getLogger(__name__)
+
+
+class SimilarityCacheOnlyMiss(PredictionError):
+    """A strict synchronous run could not use its preflight snapshot."""
 
 
 def _find_merged_db() -> tuple[str, str] | tuple[None, None]:
@@ -282,6 +286,12 @@ def _resolve_similarity_dataset_for_method(method_key: str) -> tuple[Optional[st
     return None, None
 
 
+def similarity_cache_label_for_method(method_key: str) -> str | None:
+    """Return the persistent-cache dataset label used by output enrichment."""
+    label, _target_db = _resolve_similarity_dataset_for_method(method_key)
+    return label
+
+
 def _run_mmseqs_command(cmd: list[str]) -> None:
     proc = subprocess.run(
         cmd,
@@ -414,6 +424,10 @@ def append_kcat_similarity_columns_to_output_csv(
     output_csv_path: str,
     kcat_method_key: str,
     recon_xkg: bool = False,
+    cached_similarity_snapshot: dict[
+        str, tuple[float | None, float | None]
+    ] | None = None,
+    cache_only: bool = False,
 ) -> None:
     """
     Best-effort enrichment for completed kcat jobs.
@@ -436,9 +450,11 @@ def append_kcat_similarity_columns_to_output_csv(
             raise ValueError('Output CSV is missing required "Protein Sequence" column')
 
         dataset_label, target_db = _resolve_similarity_dataset_for_method(kcat_method_key)
-        if not target_db:
+        if not target_db and not cache_only:
             raise ValueError(f"No similarity dataset is configured for method '{kcat_method_key}'")
-        if not (os.path.exists(target_db) or os.path.exists(f"{target_db}.dbtype")):
+        if not cache_only and not (
+            os.path.exists(target_db) or os.path.exists(f"{target_db}.dbtype")
+        ):
             raise FileNotFoundError(
                 f"Similarity DB for '{dataset_label or kcat_method_key}' not found at {target_db}"
             )
@@ -451,6 +467,9 @@ def append_kcat_similarity_columns_to_output_csv(
                 seen.add(seq)
                 unique_sequences.append(seq)
 
+        if not unique_sequences and cache_only:
+            _write_blank_similarity_columns(output_csv_path, mean_col, max_col)
+            return
         if not unique_sequences:
             raise ValueError("No non-empty protein sequences available for similarity analysis")
 
@@ -461,7 +480,19 @@ def append_kcat_similarity_columns_to_output_csv(
         store = None
         seq_sha_by_seq: dict[str, str] = {}
 
-        if recon_xkg:
+        if cache_only:
+            cached = cached_similarity_snapshot or {}
+            missing = [seq for seq in unique_sequences if seq not in cached]
+            if missing:
+                raise SimilarityCacheOnlyMiss(
+                    "A similarity value was absent from the ReconXKG preflight snapshot."
+                )
+            for seq in unique_sequences:
+                mean_sim, max_sim = cached[seq]
+                sequence_to_mean[seq] = 0.0 if mean_sim is None else mean_sim
+                sequence_to_max[seq] = 0.0 if max_sim is None else max_sim
+            sequences_to_compute = []
+        elif recon_xkg:
             from api.services import prediction_store as store  # noqa: PLC0415
 
             seq_sha_by_seq = {seq: store.sha256_text(seq) for seq in unique_sequences}
@@ -507,6 +538,8 @@ def append_kcat_similarity_columns_to_output_csv(
         df.to_csv(output_csv_path, index=False)
 
     except Exception as exc:
+        if cache_only:
+            raise
         _log.warning(
             "Could not enrich output CSV with kcat similarity columns",
             extra={

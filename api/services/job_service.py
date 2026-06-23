@@ -3,22 +3,24 @@ Job service that orchestrates job submission and management workflows.
 """
 
 import logging
+import time
 from typing import Any, Dict, Optional, Tuple
 
-from django.http import JsonResponse
-
-from api.models import Job
+from api.methods.registry import get as get_method
+from api.models import Job, JobProgressStage
 from api.services.about_stats_service import mark_about_stats_cache_stale
-from api.tasks import run_multi_prediction
+from api.services.recon_xkg_preflight_service import preflight_recon_xkg_cache
+from api.tasks import execute_multi_prediction_job, run_multi_prediction
 from api.utils.job_utils import (
     canonical_prediction_type,
+    canonicalise_targets,
     create_job_directory,
     create_job_status_response_data,
     create_rate_limit_headers,
     get_experimental_results,
     save_job_input_file,
-    validate_required_columns_for_methods,
     validate_prediction_parameters,
+    validate_required_columns_for_methods,
     validate_sequence_handling_option,
 )
 from api.utils.quotas import (
@@ -32,6 +34,7 @@ from api.utils.validation_utils import (
     validate_column_emptiness,
     validate_products_column,
 )
+from django.http import JsonResponse
 
 _log = logging.getLogger(__name__)
 
@@ -211,12 +214,121 @@ def process_job_submission_from_params(
     job_dir = create_job_directory(job.public_id)
     save_job_input_file(file, job_dir)
 
+    if params.get("recon_xkg", False):
+        completed_immediately = _try_complete_recon_xkg_job(
+            job=job,
+            params=params,
+            dataframe=dataframe,
+            experimental_results=experimental_results or {},
+        )
+        if completed_immediately:
+            return None, {
+                "message": "Job completed from cache",
+                "public_id": job.public_id,
+                "completed_immediately": True,
+            }
+
     dispatch_prediction_task(job.public_id, params, experimental_results)
 
     return None, {
         "message": "Job submitted successfully",
         "public_id": job.public_id,
+        "completed_immediately": False,
     }
+
+
+def _try_complete_recon_xkg_job(
+    *,
+    job: Job,
+    params: Dict[str, Any],
+    dataframe,
+    experimental_results: dict,
+) -> bool:
+    """Complete a proven full-cache job synchronously, otherwise return False."""
+    started = time.monotonic()
+    try:
+        targets = canonicalise_targets(params["targets"])
+        descriptors = {
+            target: get_method(params["methods"][target]) for target in targets
+        }
+        preflight = preflight_recon_xkg_cache(
+            dataframe=dataframe,
+            targets=targets,
+            descriptors=descriptors,
+            handle_long_sequences=params["handle_long_sequences"],
+            canonicalize_substrates=params.get("canonicalize_substrates", True),
+            include_similarity_columns=params.get("include_similarity_columns", True),
+            job_public_id=job.public_id,
+        )
+        if not preflight.complete or preflight.snapshot is None:
+            return False
+
+        execute_multi_prediction_job(
+            public_id=job.public_id,
+            targets=targets,
+            methods=params["methods"],
+            experimental_results=experimental_results,
+            canonicalize_substrates=params.get("canonicalize_substrates", True),
+            include_similarity_columns=params.get("include_similarity_columns", True),
+            disable_gpu_precompute=params.get("disable_gpu_precompute", False),
+            recon_xkg=True,
+            prediction_cache_snapshot=preflight.snapshot.predictions,
+            similarity_cache_snapshot=preflight.snapshot.similarities,
+            cache_only=True,
+        )
+        _log.info(
+            "ReconXKG job completed synchronously from cache",
+            extra={
+                "event": "recon_xkg.immediate_completion",
+                "job_public_id": job.public_id,
+                "prediction_units": preflight.prediction_units,
+                "unique_prediction_keys": preflight.unique_prediction_keys,
+                "similarity_sequences": preflight.similarity_sequences,
+                "elapsed_ms": round((time.monotonic() - started) * 1000, 2),
+            },
+        )
+        return True
+    except Exception:
+        _log.warning(
+            "ReconXKG synchronous assembly failed; queueing job normally",
+            extra={
+                "event": "recon_xkg.immediate_completion_failed",
+                "job_public_id": job.public_id,
+                "elapsed_ms": round((time.monotonic() - started) * 1000, 2),
+            },
+            exc_info=True,
+        )
+        try:
+            _reset_job_after_cache_only_failure(job)
+        except Exception:
+            # The worker reinitialises status and stages on entry, so cleanup
+            # failure must not prevent the single normal fallback dispatch.
+            _log.warning(
+                "Could not fully reset failed ReconXKG synchronous attempt",
+                extra={
+                    "event": "recon_xkg.immediate_cleanup_failed",
+                    "job_public_id": job.public_id,
+                },
+                exc_info=True,
+            )
+        return False
+
+
+def _reset_job_after_cache_only_failure(job: Job) -> None:
+    """Return an attempted synchronous job to a clean queueable state."""
+    JobProgressStage.objects.filter(job=job).delete()
+    Job.objects.filter(pk=job.pk).update(
+        status="Pending",
+        start_time=None,
+        completion_time=None,
+        error_message="",
+        output_file=None,
+        total_molecules=0,
+        molecules_processed=0,
+        invalid_rows=0,
+        total_predictions=0,
+        predictions_made=0,
+    )
 
 
 def handle_quota_validation(
@@ -250,7 +362,8 @@ def handle_quota_validation(
             {
                 "error": (
                     f"Upload rejected: daily limit exceeded. "
-                    f"{remaining} predictions remaining today; this upload requires {requested_rows}."
+                    f"{remaining} predictions remaining today; "
+                    f"this upload requires {requested_rows}."
                 )
             },
             status=429,

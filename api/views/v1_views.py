@@ -27,26 +27,24 @@ import json
 from typing import Any
 
 import pandas as pd
-from django.conf import settings
-from django.http import FileResponse, JsonResponse
-from django.utils import timezone
-from django.utils.text import slugify
-from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_GET, require_POST
-
 from api.models import Job
-from api.services.job_service import process_job_submission_from_params
-from api.services.validation_service import validate_input_file
-from api.services.similarity_service import analyze_sequence_similarity
 from api.services.embedding_progress_service import get_embedding_progress
 from api.services.gpu_embed_service import get_gpu_status
 from api.services.gpu_precompute_status_service import get_gpu_precompute_status
 from api.services.job_progress_service import get_active_stage_embedding, get_progress_summary
+from api.services.job_service import process_job_submission_from_params
+from api.services.result_service import serialize_result_csv
+from api.services.similarity_service import analyze_sequence_similarity
+from api.services.validation_service import validate_input_file
 from api.utils.api_auth import require_api_key
 from api.utils.job_utils import coerce_bool_param
 from api.utils.quotas import get_quota_usage
 from api.utils.recon_xkg import coerce_recon_xkg, resolve_recon_xkg
-
+from django.http import FileResponse, JsonResponse
+from django.utils import timezone
+from django.utils.text import slugify
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_GET
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -316,9 +314,11 @@ def api_submit_job(request):
 
     On success, returns a JSON object with:
       - jobId       — use this to poll /status/ and download /result/
+      - status      — Pending, or Completed for an authorized full-cache ReconXKG hit
       - statusUrl   — convenience URL for polling
       - resultUrl   — convenience URL for downloading results
       - quota       — your remaining quota after this submission
+      - result      — inline result envelope, present only for immediate completion
     """
     if request.method != "POST":
         return _json_error("This endpoint only accepts POST requests.", 405)
@@ -358,19 +358,25 @@ def api_submit_job(request):
 
     public_id = success_data["public_id"]
 
-    return JsonResponse(
-        {
-            "jobId": public_id,
-            "status": "Pending",
-            "statusUrl": f"/api/v1/status/{public_id}/",
-            "resultUrl": f"/api/v1/result/{public_id}/",
-            "quota": _quota_dict(
-                request.api_quota_subject,
-                daily_limit=request.api_daily_limit,
-            ),
-        },
-        status=201,
-    )
+    completed = bool(success_data.get("completed_immediately"))
+    response_data = {
+        "jobId": public_id,
+        "status": "Completed" if completed else "Pending",
+        "statusUrl": f"/api/v1/status/{public_id}/",
+        "resultUrl": f"/api/v1/result/{public_id}/",
+        "quota": _quota_dict(
+            request.api_quota_subject,
+            daily_limit=request.api_daily_limit,
+        ),
+    }
+    if completed:
+        try:
+            completed_job = Job.objects.get(public_id=public_id)
+            response_data["result"] = serialize_result_csv(completed_job.output_file.path)
+        except Exception as exc:
+            return _json_error(f"Could not read completed output file: {exc}", status=500)
+
+    return JsonResponse(response_data, status=201)
 
 
 def _parse_multipart_body(request):
@@ -709,18 +715,11 @@ def api_download_result(request, public_id):
     # --- JSON format ----------------------------------------------------------
     if request.GET.get("format") == "json":
         try:
-            df = pd.read_csv(output_path)
+            result = serialize_result_csv(output_path)
         except Exception as e:
             return _json_error(f"Could not read output file: {e}", status=500)
 
-        return JsonResponse(
-            {
-                "jobId": public_id,
-                "columns": list(df.columns),
-                "rowCount": len(df),
-                "data": df.to_dict(orient="records"),
-            }
-        )
+        return JsonResponse({"jobId": public_id, **result})
 
     # --- Default: CSV download ------------------------------------------------
     try:

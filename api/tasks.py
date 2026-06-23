@@ -27,7 +27,6 @@ import os
 from typing import Any
 
 import pandas as pd
-from celery import shared_task
 from django.conf import settings
 from django.utils import timezone
 
@@ -36,6 +35,7 @@ from api.methods.registry import get as get_method
 from api.models import Job
 from api.observability.context import log_context
 from api.prediction_engines.generic_subprocess import run_generic_subprocess_prediction
+from api.services.about_stats_service import refresh_about_stats_cache
 from api.services.gpu_precompute_status_service import clear_gpu_precompute_status
 from api.services.job_progress_service import (
     initialise_job_progress_stages,
@@ -45,10 +45,13 @@ from api.services.job_progress_service import (
     mark_stage_running,
     set_stage_prediction_snapshot,
 )
+from api.services.prediction_batch_service import (
+    SequenceBatchPlan,
+    build_sequence_batch_plan,
+    build_target_batch_plan,
+)
 from api.services.similarity_service import append_kcat_similarity_columns_to_output_csv
-from api.services.about_stats_service import refresh_about_stats_cache
 from api.utils.extra_info import _source, build_extra_info
-from api.utils.handle_long import get_valid_indices, truncate_sequences
 from api.utils.job_utils import canonicalise_targets
 from api.utils.quotas import credit_back
 from api.utils.safe_read import safe_read_csv
@@ -56,13 +59,14 @@ from api.utils.substrate_expansion import (
     SubstrateExpansionPlan,
     reduce_substrate_predictions,
 )
-
-try:
-    from webKinPred.config_docker import SERVER_LIMIT
-except ImportError:
-    from webKinPred.config_local import SERVER_LIMIT
+from celery import shared_task
 
 _log = logging.getLogger(__name__)
+
+
+class ReconXkgCacheOnlyMiss(PredictionError):
+    """The strict synchronous executor could not consume its cache snapshot."""
+
 
 _REALKCAT_CLASS_RANGES: dict[str, dict[int, tuple[float, float]]] = {
     "kcat": {
@@ -311,59 +315,17 @@ def run_multi_prediction(
         Optional pre-fetched experimental rows keyed by target.
     """
     job = Job.objects.get(public_id=public_id)
-    if job.status == "Completed":
-        _log.info(
-            "Skipping duplicate task execution — job already completed",
-            extra={"event": "task.duplicate_skipped", "job_public_id": public_id},
-        )
-        return
-    _safe_clear_gpu_precompute_status(public_id)
-    job.status = "Processing"
-    job.start_time = timezone.now()
-    job.predictions_made = 0
-    job.total_predictions = 0
-    job.save(update_fields=["status", "start_time", "predictions_made", "total_predictions"])
-
-    ordered_targets = canonicalise_targets(targets)
-    if not ordered_targets:
-        Job.objects.filter(pk=job.pk).update(
-            status="Failed",
-            error_message="No prediction targets were provided.",
-            completion_time=timezone.now(),
-        )
-        return
-
     try:
-        desc_by_target = {target: get_method(methods[target]) for target in ordered_targets}
-    except Exception as e:
-        Job.objects.filter(pk=job.pk).update(
-            status="Failed",
-            error_message=f"Invalid method selection: {e}",
-            completion_time=timezone.now(),
-        )
-        return
-
-    initialise_job_progress_stages(job, ordered_targets, desc_by_target)
-
-    try:
-        df = _load_input(job)
-        _execute_multi_prediction(
-            job=job,
-            targets=ordered_targets,
-            desc_by_target=desc_by_target,
-            df=df,
-            experimental_results=experimental_results or {},
+        execute_multi_prediction_job(
+            public_id=public_id,
+            targets=targets,
+            methods=methods,
+            experimental_results=experimental_results,
             canonicalize_substrates=canonicalize_substrates,
             include_similarity_columns=include_similarity_columns,
             disable_gpu_precompute=disable_gpu_precompute,
             recon_xkg=recon_xkg,
         )
-        Job.objects.filter(pk=job.pk).update(
-            status="Completed",
-            completion_time=timezone.now(),
-        )
-        _safe_refresh_about_stats_cache()
-
     except PredictionError as e:
         mark_running_stage_failed(public_id, message=str(e))
         Job.objects.filter(pk=job.pk).update(
@@ -374,17 +336,90 @@ def run_multi_prediction(
 
     except MemoryError:
         mark_running_stage_failed(public_id, message="Out of memory.")
-        label = "/".join(desc.display_name for desc in desc_by_target.values())
+        label = "/".join(methods.get(target, target) for target in targets)
         _handle_oom(job, label)
 
     except Exception as e:
         mark_running_stage_failed(public_id, message=str(e))
-        label = "/".join(desc.display_name for desc in desc_by_target.values())
+        label = "/".join(methods.get(target, target) for target in targets)
         Job.objects.filter(pk=job.pk).update(
             status="Failed",
             error_message=_sanitise_unexpected(e, label),
             completion_time=timezone.now(),
         )
+
+
+def execute_multi_prediction_job(
+    *,
+    public_id: str,
+    targets: list[str],
+    methods: dict[str, str],
+    experimental_results: dict | None = None,
+    canonicalize_substrates: bool = True,
+    include_similarity_columns: bool = True,
+    disable_gpu_precompute: bool = False,
+    recon_xkg: bool = False,
+    prediction_cache_snapshot: dict[str, float] | None = None,
+    similarity_cache_snapshot: dict[
+        str, tuple[float | None, float | None]
+    ] | None = None,
+    cache_only: bool = False,
+) -> None:
+    """Execute one job in-process; the Celery task and cache fast path share it."""
+    job = Job.objects.get(public_id=public_id)
+    if job.status == "Completed":
+        _log.info(
+            "Skipping duplicate task execution — job already completed",
+            extra={"event": "task.duplicate_skipped", "job_public_id": public_id},
+        )
+        return
+
+    ordered_targets = canonicalise_targets(targets)
+    if not ordered_targets:
+        raise PredictionError("No prediction targets were provided.")
+    try:
+        desc_by_target = {
+            target: get_method(methods[target]) for target in ordered_targets
+        }
+    except Exception as exc:
+        raise PredictionError(f"Invalid method selection: {exc}") from exc
+
+    if not cache_only:
+        _safe_clear_gpu_precompute_status(public_id)
+    Job.objects.filter(pk=job.pk).update(
+        status="Processing",
+        start_time=timezone.now(),
+        completion_time=None,
+        error_message="",
+        predictions_made=0,
+        total_predictions=0,
+    )
+    job.refresh_from_db()
+    initialise_job_progress_stages(job, ordered_targets, desc_by_target)
+
+    df = _load_input(job)
+    deferred_refund = _execute_multi_prediction(
+        job=job,
+        targets=ordered_targets,
+        desc_by_target=desc_by_target,
+        df=df,
+        experimental_results=experimental_results or {},
+        canonicalize_substrates=canonicalize_substrates,
+        include_similarity_columns=include_similarity_columns,
+        disable_gpu_precompute=disable_gpu_precompute,
+        recon_xkg=recon_xkg,
+        prediction_cache_snapshot=prediction_cache_snapshot,
+        similarity_cache_snapshot=similarity_cache_snapshot,
+        cache_only=cache_only,
+        defer_quota_refund=cache_only,
+    )
+    if deferred_refund and cache_only:
+        credit_back(_job_quota_subject(job), deferred_refund)
+    Job.objects.filter(pk=job.pk).update(
+        status="Completed",
+        completion_time=timezone.now(),
+    )
+    _safe_refresh_about_stats_cache()
 
 
 # ---------------------------------------------------------------------------
@@ -402,31 +437,28 @@ def _execute_multi_prediction(
     include_similarity_columns: bool = True,
     disable_gpu_precompute: bool = False,
     recon_xkg: bool = False,
-) -> None:
+    prediction_cache_snapshot: dict[str, float] | None = None,
+    similarity_cache_snapshot: dict[
+        str, tuple[float | None, float | None]
+    ] | None = None,
+    cache_only: bool = False,
+    defer_quota_refund: bool = False,
+) -> int:
     """Run targets through the canonical reaction/child orchestration path."""
     # ReconXKG cache hit/miss accounting, aggregated across all target stages.
     cache_stats: dict[str, int] | None = (
         {"hits": 0, "misses": 0, "units": 0} if recon_xkg else None
     )
-    sequences = df["Protein Sequence"].tolist()
+    sequence_plan = build_sequence_batch_plan(
+        df,
+        desc_by_target.values(),
+        job.handle_long_sequences,
+    )
+    sequences = list(sequence_plan.original_sequences)
     n_rows = len(sequences)
-    limits = [min(SERVER_LIMIT, desc.max_seq_len) for desc in desc_by_target.values()]
-    limit = min(limits) if limits else SERVER_LIMIT
-
-    if job.handle_long_sequences == "truncate":
-        sequences_proc, valid_idx = truncate_sequences(sequences, limit)
-    else:
-        valid_idx = get_valid_indices(sequences, limit, mode="skip")
-        sequences_proc = [sequences[index] for index in valid_idx]
-
-    processed_by_reaction: list[Any] = [None] * n_rows
-    for local_index, reaction_index in enumerate(valid_idx):
-        processed_by_reaction[reaction_index] = sequences_proc[local_index]
-
-    sequence_skips: dict[int, str] = {
-        index: "Sequence too long — row was excluded"
-        for index in set(range(n_rows)) - set(valid_idx)
-    }
+    valid_idx = list(sequence_plan.valid_reaction_indices)
+    processed_by_reaction = list(sequence_plan.processed_by_reaction)
+    sequence_skips = dict(sequence_plan.skipped_reactions)
     reported_skips = dict(sequence_skips)
     target_results: dict[str, dict[str, Any]] = {}
 
@@ -459,6 +491,8 @@ def _execute_multi_prediction(
                 extra_call_kwargs=extra_call_kwargs,
                 recon_xkg=recon_xkg,
                 cache_stats=cache_stats,
+                prediction_cache_snapshot=prediction_cache_snapshot,
+                cache_only=cache_only,
             )
         except Exception as exc:
             mark_stage_failed(job.public_id, target, desc.key, message=str(exc))
@@ -497,6 +531,8 @@ def _execute_multi_prediction(
             out_path,
             desc_by_target["kcat"].key,
             recon_xkg=recon_xkg,
+            cached_similarity_snapshot=similarity_cache_snapshot,
+            cache_only=cache_only,
         )
 
     if cache_stats is not None:
@@ -518,13 +554,13 @@ def _execute_multi_prediction(
         )
     processed_reactions = int(fully_predicted.sum())
     to_refund = max(0, int(job.requested_rows) - processed_reactions)
-    if to_refund:
-        credit_back(_job_quota_subject(job), to_refund)
-
     Job.objects.filter(pk=job.pk).update(
         output_file=os.path.relpath(out_path, settings.MEDIA_ROOT),
         error_message=_build_skipped_message(reported_skips),
     )
+    if to_refund and not defer_quota_refund:
+        credit_back(_job_quota_subject(job), to_refund)
+    return to_refund
 
 
 def _execute_target_batch(
@@ -542,22 +578,23 @@ def _execute_target_batch(
     extra_call_kwargs: dict[str, Any],
     recon_xkg: bool = False,
     cache_stats: dict[str, int] | None = None,
+    prediction_cache_snapshot: dict[str, float] | None = None,
+    cache_only: bool = False,
 ) -> dict[str, Any]:
     """Execute one method/target either natively or as an expanded child batch."""
     n_rows = len(sequences)
-    input_behavior = desc.input_behavior(target)
-    if (
-        input_behavior == "expanded_pair"
-        and "Substrate" in desc.col_to_kwarg
-        and "Substrates" in df.columns
-    ):
-        plan = SubstrateExpansionPlan.build(
-            df["Substrates"].tolist(),
-            valid_reaction_indices,
-        )
-        child_sequences = plan.expanded_sequences(processed_by_reaction)
-        call_kwargs = _build_expanded_call_kwargs(desc, df, plan)
-        call_kwargs.update(desc.target_kwargs.get(target, {}))
+    sequence_plan = SequenceBatchPlan(
+        original_sequences=tuple(sequences),
+        processed_by_reaction=tuple(processed_by_reaction),
+        valid_reaction_indices=tuple(valid_reaction_indices),
+        skipped_reactions={},
+    )
+    batch = build_target_batch_plan(desc, target, df, sequence_plan)
+    input_behavior = batch.input_behavior
+    if input_behavior == "expanded_pair" and batch.expansion is not None:
+        plan = batch.expansion
+        child_sequences = list(batch.sequences)
+        call_kwargs = dict(batch.call_kwargs)
         call_kwargs.update(extra_call_kwargs)
 
         if child_sequences:
@@ -570,6 +607,8 @@ def _execute_target_batch(
                 disable_gpu_precompute=disable_gpu_precompute,
                 recon_xkg=recon_xkg,
                 cache_stats=cache_stats,
+                cache_snapshot=prediction_cache_snapshot,
+                cache_only=cache_only,
                 **call_kwargs,
             )
         else:
@@ -629,14 +668,6 @@ def _execute_target_batch(
             "output_col": desc.output_cols[target],
         }
 
-    native_call_kwargs: dict[str, list[Any]] | None = None
-    if input_behavior == "native_multi" and "Substrates" in df.columns:
-        plan = SubstrateExpansionPlan.build(
-            df["Substrates"].tolist(),
-            valid_reaction_indices,
-        )
-        native_call_kwargs = _build_native_multi_call_kwargs(desc, df, plan)
-
     return _execute_native_target_batch(
         job=job,
         desc=desc,
@@ -649,56 +680,13 @@ def _execute_target_batch(
         canonicalize_substrates=canonicalize_substrates,
         disable_gpu_precompute=disable_gpu_precompute,
         extra_call_kwargs=extra_call_kwargs,
-        call_kwargs_override=native_call_kwargs,
+        call_kwargs_override=dict(batch.call_kwargs),
         apply_experimental_overrides=input_behavior == "expanded_pair",
         recon_xkg=recon_xkg,
         cache_stats=cache_stats,
+        prediction_cache_snapshot=prediction_cache_snapshot,
+        cache_only=cache_only,
     )
-
-
-def _build_expanded_call_kwargs(
-    desc,
-    df: pd.DataFrame,
-    plan: SubstrateExpansionPlan,
-) -> dict[str, list[Any]]:
-    call_kwargs: dict[str, list[Any]] = {}
-    for column, kwarg_name in desc.col_to_kwarg.items():
-        if column == "Substrate":
-            call_kwargs[kwarg_name] = plan.expanded_substrates()
-            continue
-        if column not in df.columns:
-            raise PredictionError(
-                f"Missing column required for {desc.display_name}: {column}"
-            )
-        call_kwargs[kwarg_name] = plan.expanded_parent_values(df[column].tolist())
-    return call_kwargs
-
-
-def _build_native_multi_call_kwargs(
-    desc,
-    df: pd.DataFrame,
-    plan: SubstrateExpansionPlan,
-) -> dict[str, list[Any]]:
-    """Build one ordered substrate collection per original reaction row."""
-    call_kwargs: dict[str, list[Any]] = {}
-    for column, kwarg_name in desc.col_to_kwarg.items():
-        if column == "Substrate":
-            grouped_substrates: list[list[str]] = []
-            for _reaction_position, start, end in plan.reaction_slices:
-                grouped_substrates.append(
-                    [plan.children[index].substrate for index in range(start, end)]
-                )
-            call_kwargs[kwarg_name] = grouped_substrates
-            continue
-        if column not in df.columns:
-            raise PredictionError(
-                f"Missing column required for {desc.display_name}: {column}"
-            )
-        call_kwargs[kwarg_name] = [
-            df[column].iloc[reaction_position]
-            for reaction_position in plan.reaction_positions
-        ]
-    return call_kwargs
 
 
 def _execute_native_target_batch(
@@ -718,6 +706,8 @@ def _execute_native_target_batch(
     apply_experimental_overrides: bool = True,
     recon_xkg: bool = False,
     cache_stats: dict[str, int] | None = None,
+    prediction_cache_snapshot: dict[str, float] | None = None,
+    cache_only: bool = False,
 ) -> dict[str, Any]:
     n_rows = len(sequences)
     predictions: list[Any] = [""] * n_rows
@@ -748,6 +738,8 @@ def _execute_native_target_batch(
             disable_gpu_precompute=disable_gpu_precompute,
             recon_xkg=recon_xkg,
             cache_stats=cache_stats,
+            cache_snapshot=prediction_cache_snapshot,
+            cache_only=cache_only,
             **call_kwargs,
         )
         for local_index, reaction_index in enumerate(valid_reaction_indices):
@@ -967,6 +959,8 @@ def _invoke_method_prediction(
     disable_gpu_precompute: bool = False,
     recon_xkg: bool = False,
     cache_stats: dict[str, int] | None = None,
+    cache_snapshot: dict[str, float] | None = None,
+    cache_only: bool = False,
     **call_kwargs,
 ) -> tuple[list, dict[int, str]]:
     """
@@ -980,6 +974,10 @@ def _invoke_method_prediction(
     ``(predictions, invalid_reasons)`` where ``invalid_reasons`` maps local
     indices (into ``sequences``) to human-readable skip reasons.
     """
+    if cache_only and not recon_xkg:
+        raise ReconXkgCacheOnlyMiss(
+            "Cache-only prediction execution requires ReconXKG mode."
+        )
     if not recon_xkg:
         return _run_method_engine(
             desc,
@@ -999,6 +997,8 @@ def _invoke_method_prediction(
         canonicalize_substrates=canonicalize_substrates,
         disable_gpu_precompute=disable_gpu_precompute,
         cache_stats=cache_stats,
+        cache_snapshot=cache_snapshot,
+        cache_only=cache_only,
         call_kwargs=call_kwargs,
     )
 
@@ -1071,62 +1071,13 @@ def _recon_xkg_unit_keys(
     """
     from api.services import prediction_store as store
 
-    n = len(sequences)
-    model_version = getattr(desc, "model_version", "1")
-    params_fp = store.params_fingerprint(
-        canonicalize_substrates, desc.target_kwargs.get(target, {})
+    return store.build_unit_keys(
+        desc,
+        target,
+        sequences,
+        call_kwargs,
+        canonicalize_substrates,
     )
-
-    sub_kwarg = desc.col_to_kwarg.get("Substrate") or desc.col_to_kwarg.get("Substrates")
-    prod_kwarg = desc.col_to_kwarg.get("Products")
-    sub_values = call_kwargs.get(sub_kwarg) if sub_kwarg else None
-    prod_values = call_kwargs.get(prod_kwarg) if prod_kwarg else None
-
-    keys: list[str | None] = [None] * n
-    components: list[tuple[str, str, str] | None] = [None] * n
-
-    for i in range(n):
-        seq = sequences[i]
-        if seq is None:
-            continue
-
-        sub_val = (
-            sub_values[i]
-            if isinstance(sub_values, (list, tuple)) and i < len(sub_values)
-            else None
-        )
-        if sub_val is None:
-            continue
-        sub_canon = store.canonical_unit(sub_val, canonicalize_substrates)
-        if sub_canon is None:
-            continue  # unparseable substrate -> uncacheable, predict fresh
-
-        products_canon = ""
-        if prod_values is not None:
-            prod_val = (
-                prod_values[i]
-                if isinstance(prod_values, (list, tuple)) and i < len(prod_values)
-                else None
-            )
-            if prod_val is not None and str(prod_val).strip():
-                pc = store.canonical_unit(prod_val, canonicalize_substrates)
-                if pc is None:
-                    continue  # unparseable product -> uncacheable
-                products_canon = pc
-
-        seq_sha = store.sha256_text(str(seq))
-        keys[i] = store.make_lookup_key(
-            target=target,
-            method=desc.key,
-            model_version=model_version,
-            params_fp=params_fp,
-            sequence_sha256=seq_sha,
-            substrate_canon=sub_canon,
-            products_canon=products_canon,
-        )
-        components[i] = (seq_sha, sub_canon, products_canon)
-
-    return keys, components, params_fp
 
 
 def _invoke_method_prediction_cached(
@@ -1138,6 +1089,8 @@ def _invoke_method_prediction_cached(
     canonicalize_substrates: bool,
     disable_gpu_precompute: bool,
     cache_stats: dict[str, int] | None,
+    cache_snapshot: dict[str, float] | None,
+    cache_only: bool,
     call_kwargs: dict[str, Any],
 ) -> tuple[list, dict[int, str]]:
     """Serve a batch from the ReconXKG store, computing only the misses."""
@@ -1149,7 +1102,12 @@ def _invoke_method_prediction_cached(
         desc, target, sequences, call_kwargs, canonicalize_substrates
     )
 
-    cached = store.get_many([key for key in keys if key])
+    if cache_only:
+        cached = cache_snapshot or {}
+    elif cache_snapshot is not None:
+        cached = cache_snapshot
+    else:
+        cached = store.get_many([key for key in keys if key])
 
     predictions: list[Any] = [None] * n
     invalid: dict[int, str] = {}
@@ -1161,6 +1119,11 @@ def _invoke_method_prediction_cached(
             hit_count += 1
         else:
             miss_indices.append(i)
+
+    if cache_only and miss_indices:
+        raise ReconXkgCacheOnlyMiss(
+            "A prediction value was absent from the ReconXKG preflight snapshot."
+        )
 
     if miss_indices:
         # Slice only the positionally-aligned (per-row) kwargs; pass scalar
