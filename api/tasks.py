@@ -464,7 +464,11 @@ def _execute_multi_prediction(
 
     eitlem_targets = [target for target in targets if desc_by_target[target].key == "EITLEM"]
     last_eitlem_target = eitlem_targets[-1] if eitlem_targets else None
-    omniesi_targets = [target for target in targets if desc_by_target[target].key == "OmniESI"]
+    # OmniESI and OmniESI-O2DENet share the same per-residue esm2 cache, so they
+    # are coordinated as one family: embeddings are kept until the last target
+    # across both methods has run.
+    omniesi_family_keys = {"OmniESI", "OmniESI-O2DENet"}
+    omniesi_targets = [target for target in targets if desc_by_target[target].key in omniesi_family_keys]
     last_omniesi_target = omniesi_targets[-1] if omniesi_targets else None
 
     for target in targets:
@@ -473,7 +477,7 @@ def _execute_multi_prediction(
         extra_call_kwargs: dict[str, Any] = {}
         if desc.key == "EITLEM":
             extra_call_kwargs["cleanup_esm1v_embeddings"] = target == last_eitlem_target
-        if desc.key == "OmniESI":
+        if desc.key in omniesi_family_keys:
             extra_call_kwargs["cleanup_embeddings_after_run"] = target == last_omniesi_target
 
         try:

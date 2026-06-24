@@ -225,7 +225,7 @@ def expected_paths_by_seq(
             }
         return out
 
-    if method_key == "OmniESI":
+    if method_key in {"OmniESI", "OmniESI-O2DENet"}:
         base = media_path / "sequence_info" / "omniesi_esm2"
         for seq_id in seq_ids:
             out[seq_id] = {str((base / f"{seq_id}.pt").resolve())}
@@ -332,7 +332,7 @@ def _profile_for_method(method_key: str) -> tuple[str | None, bool, str | None]:
         return "eitlem_esm1v", True, None
     if method_key == "CatPred":
         return "catpred_embed", True, None
-    if method_key == "OmniESI":
+    if method_key in {"OmniESI", "OmniESI-O2DENet"}:
         return "omniesi_esm2", True, None
     if method_key == "RealKcat":
         return "realkcat_esm2_last_mean", True, None

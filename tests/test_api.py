@@ -33,11 +33,6 @@ DEFAULT_KEY = "ak_17f90e7c1f6ac3f5fc861d8cec4667a2b888c358a333bb81f75b631a9b5006
 # Known method IDs (normalised to lowercase for comparison)
 # ---------------------------------------------------------------------------
 
-# GPU-offload-capable methods (subset of the above)
-GPU_SUPPORTED_KCAT_METHOD_IDS = ["KinForm-H", "KinForm-L", "UniKP", "TurNup", "CataPro", "OmniESI"]
-GPU_SUPPORTED_KM_METHOD_IDS = ["KinForm-H", "UniKP", "CataPro", "OmniESI"]
-GPU_SUPPORTED_KCAT_KM_METHOD_IDS = ["CataPro"]
-
 # kcat-capable methods
 KCAT_METHOD_IDS = [
     "DLKcat",
@@ -49,14 +44,21 @@ KCAT_METHOD_IDS = [
     "CataPro",
     "CatPred",
     "OmniESI",
+    "OmniESI-O2DENet",
     "RealKcat",
 ]
 # Km-capable methods
-KM_METHOD_IDS = ["EITLEM", "UniKP", "KinForm-H", "CataPro", "CatPred", "OmniESI", "RealKcat", "MMISA-KM"]
+KM_METHOD_IDS = ["EITLEM", "UniKP", "KinForm-H", "CataPro", "CatPred", "OmniESI", "OmniESI-O2DENet", "RealKcat", "MMISA-KM"]
 # kcat/Km-capable methods
 KCAT_KM_METHOD_IDS = ["CataPro", "IECata"]
 # All recognised method IDs (de-duplicated, lowercase)
 ALL_METHOD_IDS = sorted({m.lower() for m in KCAT_METHOD_IDS + KM_METHOD_IDS + KCAT_KM_METHOD_IDS})
+
+# GPU-offload-capable methods (subset of the above)
+GPU_SUPPORTED_KCAT_METHOD_IDS = ["KinForm-H", "KinForm-L", "UniKP", "TurNup", "CataPro", "OmniESI", "OmniESI-O2DENet"]
+GPU_SUPPORTED_KM_METHOD_IDS = ["KinForm-H", "UniKP", "CataPro", "OmniESI", "OmniESI-O2DENet"]
+GPU_SUPPORTED_KCAT_KM_METHOD_IDS = ["CataPro"]
+
 
 
 def sel(methods: set, *names: str) -> bool:

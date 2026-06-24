@@ -8,8 +8,10 @@ Contract:
 Input JSON:
     {"rows": [{"sequence": "MKTAY...", "substrates": "CC(=O)O",
                "seq_id": "sid_abc123"}, ...],
-     "params": {"kinetics_type": "KCAT"},   # or "KM"
-     "target": "kcat"}                       # alternative to params
+     "params": {"kinetics_type": "KCAT",     # or "KM"
+                "variant": "ensemble"},      # "ensemble" (OmniESI, default) or
+                                             # "o2denet"  (OmniESI + O2DENet)
+     "target": "kcat"}                       # alternative to params.kinetics_type
 
 Output JSON:
     {"predictions": [0.42, null, 1.3, ...], "invalid_indices": [1, ...]}
@@ -504,6 +506,73 @@ def _discover_available_seeds(weight_folder: Path) -> list[int]:
     ]
 
 
+def _variant_from_payload(payload: dict[str, Any]) -> str:
+    """
+    Resolve the prediction variant from payload params.
+
+    "ensemble"  — vanilla OmniESI: 10-seed ensemble under fold_OmniESI (default).
+    "o2denet"   — OmniESI + O2DENet: a single checkpoint under fold_O2DENet.
+                  The O2DENet checkpoints share the OmniESI inference architecture
+                  but carry extra training-only parameters (e.g. cross_attn), so
+                  they are loaded with strict=False (see _resolve_checkpoints).
+    """
+    params = payload.get("params") or {}
+    raw = str(params.get("variant", "")).strip().lower() if isinstance(params, dict) else ""
+    return raw if raw in {"ensemble", "o2denet"} else "ensemble"
+
+
+def _resolve_checkpoints(kinetics_type: str, variant: str) -> tuple[list[Path], bool]:
+    """
+    Resolve the checkpoint file list and the load_state_dict strictness for a
+    (kinetics_type, variant) pair.
+
+    Returns
+    -------
+    (checkpoint_paths, strict)
+        checkpoint_paths : list of best_model_epoch.pth files to ensemble over.
+                           A single-element list runs as a one-model "ensemble"
+                           (geometric mean of one value == that value).
+        strict           : passed to load_state_dict. False for O2DENet so the
+                           training-only parameters absent from our OmniESI class
+                           are ignored without error.
+    """
+    additional_data_dir = _additional_data_dir()
+    if kinetics_type == "KCAT":
+        task_dir = "CatPred_kcat"
+    elif kinetics_type == "KM":
+        task_dir = "CatPred_km"
+    else:
+        raise RuntimeError(f"Unsupported kinetics type: {kinetics_type!r}")
+    task_root = additional_data_dir / "results" / task_dir
+
+    if variant == "o2denet":
+        ckpt = task_root / "fold_O2DENet" / "best_model_epoch.pth"
+        if not ckpt.exists():
+            raise RuntimeError(
+                f"No OmniESI+O2DENet checkpoint found at: {ckpt}. "
+                "Set OmniESI_ADDITIONAL_DATA to the correct additional_data/ directory."
+            )
+        # strict=False: O2DENet checkpoints include training-only parameters
+        # (e.g. cross_attn) that are not part of the OmniESI inference graph.
+        return [ckpt], False
+
+    # Default: vanilla OmniESI 10-seed ensemble.
+    weight_folder = task_root / "fold_OmniESI"
+    available_seeds = _discover_available_seeds(weight_folder)
+    if not available_seeds:
+        raise RuntimeError(
+            f"No OmniESI checkpoints found under: {weight_folder}. "
+            "Set OmniESI_ADDITIONAL_DATA to the correct additional_data/ directory."
+        )
+    return (
+        [
+            weight_folder / f"OmniESI_ensemble_{seed}" / "best_model_epoch.pth"
+            for seed in available_seeds
+        ],
+        True,
+    )
+
+
 # ============================================================================
 # Ensemble inference with progress streaming
 # ============================================================================
@@ -515,6 +584,7 @@ def predict_kinetic_parameter_ensemble(
     n_total_rows: int,
     first_valid_global_idx: int,
     valid_global_indices: list[int],
+    variant: str = "ensemble",
 ) -> list[float | None]:
     """
     Run OmniESI ensemble inference over valid_df rows.
@@ -543,20 +613,7 @@ def predict_kinetic_parameter_ensemble(
     set_seed(42)
     warnings.filterwarnings("ignore", message="invalid value encountered in divide")
 
-    additional_data_dir = _additional_data_dir()
-    if kinetics_type == "KCAT":
-        weight_folder = additional_data_dir / "results" / "CatPred_kcat" / "fold_OmniESI"
-    elif kinetics_type == "KM":
-        weight_folder = additional_data_dir / "results" / "CatPred_km" / "fold_OmniESI"
-    else:
-        raise RuntimeError(f"Unsupported kinetics type: {kinetics_type!r}")
-
-    available_seeds = _discover_available_seeds(weight_folder)
-    if not available_seeds:
-        raise RuntimeError(
-            f"No OmniESI checkpoints found under: {weight_folder}. "
-            "Set OmniESI_ADDITIONAL_DATA to the correct additional_data/ directory."
-        )
+    checkpoint_paths, strict = _resolve_checkpoints(kinetics_type, variant)
 
     n_rows        = len(valid_df)
     progress_done = -1
@@ -576,13 +633,31 @@ def predict_kinetic_parameter_ensemble(
     # Keeps each model in GPU memory for the full batch rather than reloading
     # per row.  With 10 seeds of OmniESI the combined VRAM cost is manageable;
     # if memory is tight, reduce to a smaller seed subset before calling here.
-    logger.info("Loading %d OmniESI checkpoints onto %s", len(available_seeds), device)
+    logger.info(
+        "Loading %d OmniESI checkpoint(s) (variant=%s, strict=%s) onto %s",
+        len(checkpoint_paths), variant, strict, device,
+    )
     loaded_models: list[Any] = []
-    for seed in available_seeds:
+    for weight_path in checkpoint_paths:
         m = OmniESI(**cfg)
-        weight_path = weight_folder / f"OmniESI_ensemble_{seed}" / "best_model_epoch.pth"
         state = _torch_load_compat(weight_path, map_location=device)
-        m.load_state_dict(state)
+        load_result = m.load_state_dict(state, strict=strict)
+        if not strict:
+            missing    = list(getattr(load_result, "missing_keys", []) or [])
+            unexpected = list(getattr(load_result, "unexpected_keys", []) or [])
+            if missing:
+                # Missing keys mean our architecture expected weights the
+                # checkpoint did not provide — predictions would be unreliable.
+                raise RuntimeError(
+                    f"Checkpoint {weight_path} is missing {len(missing)} parameter(s) "
+                    f"required by the OmniESI architecture, e.g. {missing[:8]}."
+                )
+            if unexpected:
+                logger.info(
+                    "Checkpoint %s loaded with %d training-only parameter(s) ignored "
+                    "(not part of the inference graph), e.g. %s",
+                    weight_path.name, len(unexpected), unexpected[:8],
+                )
         m.to(device)
         m.eval()
         loaded_models.append(m)
@@ -661,6 +736,7 @@ def run_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
     rows          = _safe_rows(payload)
     kinetics_type = _kinetics_type_from_payload(payload)
+    variant       = _variant_from_payload(payload)
     cleanup_embeddings_after_run = _payload_cleanup_flag(payload)
 
     n_total         = len(rows)
@@ -707,6 +783,7 @@ def run_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
             n_total_rows           = n_total,
             first_valid_global_idx = valid_indices[0],
             valid_global_indices   = valid_indices,
+            variant                = variant,
         )
     finally:
         _cleanup_shared_embeddings(

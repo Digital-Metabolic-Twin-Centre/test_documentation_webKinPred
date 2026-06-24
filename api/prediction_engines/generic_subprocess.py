@@ -38,7 +38,7 @@ from api.prediction_engines.subprocess_runner import run_prediction_subprocess
 from api.utils.convert_to_mol import convert_to_mol
 from webKinPred.settings import MEDIA_ROOT
 _log = logging.getLogger(__name__)
-_SEQ_ID_ATTACH_METHOD_KEYS = {"OmniESI", "RealKcat", "IECata"}
+_SEQ_ID_ATTACH_METHOD_KEYS = {"OmniESI", "OmniESI-O2DENet", "RealKcat", "IECata"}
 
 
 def run_generic_subprocess_prediction(
