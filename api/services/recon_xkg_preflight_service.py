@@ -61,6 +61,8 @@ def preflight_recon_xkg_cache(
             descriptors.values(),
             handle_long_sequences,
         )
+        target_batches: dict[str, Any] = {}
+        target_keys: dict[str, list[str | None]] = {}
         for target in targets:
             descriptor = descriptors[target]
             batch = build_target_batch_plan(
@@ -69,6 +71,7 @@ def preflight_recon_xkg_cache(
                 dataframe,
                 sequence_plan,
             )
+            target_batches[target] = batch
             keys, _components, _params_fp = prediction_store.build_unit_keys(
                 descriptor,
                 target,
@@ -76,6 +79,7 @@ def preflight_recon_xkg_cache(
                 batch.call_kwargs,
                 canonicalize_substrates,
             )
+            target_keys[target] = keys
             prediction_units += len(keys)
             unique_keys.update(key for key in keys if key is not None)
             if any(key is None for key in keys):
@@ -126,15 +130,12 @@ def preflight_recon_xkg_cache(
                     started,
                 )
 
-            unique_sequences = list(
-                dict.fromkeys(
-                    child.sequence
-                    for child in sequence_plan.expansion.children
-                    if (
-                        child.processed_sequence is not None
-                        and _valid_similarity_sequence(child.sequence)
-                    )
-                )
+            unique_sequences = _cached_similarity_sequences_for_kcat(
+                dataframe=dataframe,
+                sequence_plan=sequence_plan,
+                kcat_batch=target_batches.get("kcat"),
+                kcat_keys=target_keys.get("kcat", []),
+                prediction_values=prediction_values,
             )
             similarity_count = len(unique_sequences)
             sequence_hashes = {
@@ -238,6 +239,59 @@ def _valid_similarity_entry(value: Any) -> bool:
     return all(
         item is None or (isinstance(item, Real) and math.isfinite(float(item)))
         for item in value
+    )
+
+
+def _cached_similarity_sequences_for_kcat(
+    *,
+    dataframe: pd.DataFrame,
+    sequence_plan: Any,
+    kcat_batch: Any,
+    kcat_keys: list[str | None],
+    prediction_values: dict[str, Any],
+) -> list[str]:
+    if kcat_batch is None:
+        return []
+
+    if kcat_batch.unit_expansion is not None:
+        from api.utils.sequence_expansion import reduce_sequence_predictions
+
+        child_predictions: list[Any] = []
+        child_errors: dict[int, str] = {}
+        for index, key in enumerate(kcat_keys):
+            outcome = prediction_values.get(key) if key else None
+            if isinstance(outcome, prediction_store.CachedFailure):
+                child_predictions.append(None)
+                child_errors[index] = outcome.reason
+            else:
+                child_predictions.append(prediction_store.coerce_value(outcome))
+
+        reduced = reduce_sequence_predictions(
+            plan=kcat_batch.unit_expansion,
+            target="kcat",
+            child_predictions=child_predictions,
+            child_sources=[""] * len(child_predictions),
+            child_errors=child_errors,
+            child_details=None,
+            reaction_count=len(dataframe),
+        )
+        return list(
+            dict.fromkeys(
+                sequence
+                for sequence in reduced.selected_sequences
+                if _valid_similarity_sequence(sequence)
+            )
+        )
+
+    return list(
+        dict.fromkeys(
+            child.sequence
+            for child in sequence_plan.expansion.children
+            if (
+                child.processed_sequence is not None
+                and _valid_similarity_sequence(child.sequence)
+            )
+        )
     )
 
 
