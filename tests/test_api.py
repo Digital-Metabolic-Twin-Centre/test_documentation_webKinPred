@@ -9,6 +9,7 @@ Usage:
     python tests/test_api.py --key ak_yourkey       # pass a key on the command line
     python tests/test_api.py --base http://host:8000/api/v1   # different server
     python tests/test_api.py --test-multi-sub-for-single-sub-methods  # slow value checks
+    python tests/test_api.py --only-multimer        # focused multi-sequence checks
 """
 
 import argparse
@@ -48,16 +49,46 @@ KCAT_METHOD_IDS = [
     "RealKcat",
 ]
 # Km-capable methods
-KM_METHOD_IDS = ["EITLEM", "UniKP", "KinForm-H", "CataPro", "CatPred", "OmniESI", "OmniESI-O2DENet", "RealKcat", "MMISA-KM"]
+KM_METHOD_IDS = [
+    "EITLEM",
+    "UniKP",
+    "KinForm-H",
+    "CataPro",
+    "CatPred",
+    "OmniESI",
+    "OmniESI-O2DENet",
+    "RealKcat",
+    "MMISA-KM",
+]
 # kcat/Km-capable methods
 KCAT_KM_METHOD_IDS = ["CataPro", "IECata"]
 # All recognised method IDs (de-duplicated, lowercase)
 ALL_METHOD_IDS = sorted({m.lower() for m in KCAT_METHOD_IDS + KM_METHOD_IDS + KCAT_KM_METHOD_IDS})
 
 # GPU-offload-capable methods (subset of the above)
-GPU_SUPPORTED_KCAT_METHOD_IDS = ["KinForm-H", "KinForm-L", "UniKP", "TurNup", "CataPro", "OmniESI", "OmniESI-O2DENet"]
-GPU_SUPPORTED_KM_METHOD_IDS = ["KinForm-H", "UniKP", "CataPro", "OmniESI", "OmniESI-O2DENet"]
-GPU_SUPPORTED_KCAT_KM_METHOD_IDS = ["CataPro"]
+GPU_SUPPORTED_KCAT_METHOD_IDS = [
+    "KinForm-H",
+    "KinForm-L",
+    "UniKP",
+    "TurNup",
+    "CataPro",
+    "OmniESI",
+    "OmniESI-O2DENet",
+    "EITLEM",
+    "CatPred",
+    "RealKcat",
+]
+GPU_SUPPORTED_KM_METHOD_IDS = [
+    "KinForm-H",
+    "UniKP",
+    "CataPro",
+    "OmniESI",
+    "OmniESI-O2DENet",
+    "EITLEM",
+    "CatPred",
+    "RealKcat",
+]
+GPU_SUPPORTED_KCAT_KM_METHOD_IDS = ["CataPro", "IECata"]
 
 
 
@@ -359,7 +390,9 @@ def test_methods(base: str, methods: set) -> None:
         for target_methods in j.get("methods", {}).values()
         for method in target_methods
     ]
-    pair_entries = [method for method in all_method_entries if method.get("inputFormat") == "single"]
+    pair_entries = [
+        method for method in all_method_entries if method.get("inputFormat") == "single"
+    ]
     check(
         "pair methods accept substrate_list",
         bool(pair_entries)
@@ -368,11 +401,21 @@ def test_methods(base: str, methods: set) -> None:
     check(
         "methods publish target-specific input metadata",
         bool(all_method_entries)
-        and all(isinstance(method.get("acceptedCsvTypesByTarget"), dict) for method in all_method_entries)
-        and all(isinstance(method.get("inputBehaviorByTarget"), dict) for method in all_method_entries),
+        and all(
+            isinstance(method.get("acceptedCsvTypesByTarget"), dict)
+            for method in all_method_entries
+        )
+        and all(
+            isinstance(method.get("inputBehaviorByTarget"), dict)
+            for method in all_method_entries
+        ),
     )
     catpred_kcat = next(
-        (method for method in j.get("methods", {}).get("kcat", []) if method.get("id") == "CatPred"),
+        (
+            method
+            for method in j.get("methods", {}).get("kcat", [])
+            if method.get("id") == "CatPred"
+        ),
         None,
     )
     catpred_km = next(
@@ -1278,9 +1321,15 @@ def test_gpu_methods(base: str, headers: dict, methods: set, poll_timeout: int) 
                     used_gpu = bool(
                         gpu_precompute.get("usedGpu", gpu_precompute.get("used_gpu", False))
                     )
-                    check(f"[{label}] gpuPrecompute.attempted=true", bool(gpu_precompute.get("attempted")))
+                    check(
+                        f"[{label}] gpuPrecompute.attempted=true",
+                        bool(gpu_precompute.get("attempted")),
+                    )
                     check(f"[{label}] gpuPrecompute.usedGpu=true", used_gpu)
-                    check(f"[{label}] gpuPrecompute.completed=true", bool(gpu_precompute.get("completed")))
+                    check(
+                        f"[{label}] gpuPrecompute.completed=true",
+                        bool(gpu_precompute.get("completed")),
+                    )
                     check(
                         f"[{label}] gpuPrecompute.failed=false",
                         not bool(gpu_precompute.get("failed")),
@@ -1351,7 +1400,11 @@ def _submit_wait_json_result(
         methods,
         include_similarity_columns=False,
     )
-    if not check(f"[{label}] submit 201", response.status_code == 201, f"got {response.status_code}"):
+    if not check(
+        f"[{label}] submit 201",
+        response.status_code == 201,
+        f"got {response.status_code}",
+    ):
         return None
     job_id = response.json().get("jobId")
     if not check(f"[{label}] has jobId", bool(job_id)):
@@ -1490,13 +1543,19 @@ def _compare_expanded_target(
     check(
         f"[{label}] {target} values match scalar controls",
         len(aggregate_array) == len(controls)
-        and all(_numbers_match(value, controls[index]) for index, value in enumerate(aggregate_array)),
+        and all(
+            _numbers_match(value, controls[index])
+            for index, value in enumerate(aggregate_array)
+        ),
     )
     check(
         f"[{label}] full {target} equals multi {target}",
         isinstance(full_array, list)
         and len(full_array) == len(aggregate_array)
-        and all(_numbers_match(value, aggregate_array[index]) for index, value in enumerate(full_array)),
+        and all(
+            _numbers_match(value, aggregate_array[index])
+            for index, value in enumerate(full_array)
+        ),
     )
     extra_items = _json_cell_array(multi_rows[0].get(f"Extra Info {target}"))
     check(
@@ -1566,7 +1625,10 @@ def _test_catpred_native_multi(
     legacy_value = legacy["data"][0].get(legacy_column) if legacy_column else None
     multi_value = multi["data"][0].get(multi_column) if multi_column else None
     full_value = full["data"][0].get(full_column) if full_column else None
-    check(f"[{label}] semicolon kcat equals legacy dot kcat", _numbers_match(multi_value, legacy_value))
+    check(
+        f"[{label}] semicolon kcat equals legacy dot kcat",
+        _numbers_match(multi_value, legacy_value),
+    )
     check(f"[{label}] full kcat equals semicolon kcat", _numbers_match(full_value, multi_value))
     check(
         f"[{label}] native kcat has no child-reduction Extra Info",
@@ -1651,6 +1713,506 @@ def test_multi_sub_for_single_sub_methods(
             )
 
     _test_catpred_native_multi(base, headers, metadata, methods, poll_timeout)
+
+
+# ---------------------------------------------------------------------------
+# Opt-in multi-sequence value verification
+# ---------------------------------------------------------------------------
+
+
+def _multimer_test_sequences() -> list[str]:
+    lines = SINGLE_SUBSTRATE_CSV.strip().splitlines()[1:3]
+    return [line.rsplit(",", 1)[0] for line in lines]
+
+
+def _multimer_sequence_value() -> str:
+    return ";".join(_multimer_test_sequences())
+
+
+def _multimer_csv(kind: str) -> str:
+    seq_a, seq_b = _multimer_test_sequences()
+    seqs = f"{seq_a};{seq_b}"
+    if kind == "scalar_control":
+        return (
+            "Protein Sequence,Substrate\n"
+            f"{seq_a},CCO\n"
+            f"{seq_b},CCO\n"
+        )
+    if kind == "scalar_multimer":
+        return "Protein Sequence,Substrate\n" f"{seqs},CCO\n"
+    if kind == "multi_sub_control":
+        return (
+            "Protein Sequence,Substrate\n"
+            f"{seq_a},CCO\n"
+            f"{seq_a},C1CCCCC1\n"
+            f"{seq_b},CCO\n"
+            f"{seq_b},C1CCCCC1\n"
+        )
+    if kind == "multi_sub_multimer":
+        return "Protein Sequence,Substrates\n" f"{seqs},CCO;C1CCCCC1\n"
+    if kind == "native_multi_control":
+        return (
+            "Protein Sequence,Substrates\n"
+            f"{seq_a},CCO;C1CCCCC1\n"
+            f"{seq_b},CCO;C1CCCCC1\n"
+        )
+    if kind == "native_multi_multimer":
+        return "Protein Sequence,Substrates\n" f"{seqs},CCO;C1CCCCC1\n"
+    if kind == "full_control":
+        return (
+            "Protein Sequence,Substrates,Products\n"
+            f"{seq_a},CCO;C1CCCCC1,CC=O;O\n"
+            f"{seq_b},CCO;C1CCCCC1,CC=O;O\n"
+        )
+    if kind == "full_multimer":
+        return (
+            "Protein Sequence,Substrates,Products\n"
+            f"{seqs},CCO;C1CCCCC1,CC=O;O\n"
+        )
+    raise ValueError(f"Unknown multimer CSV kind: {kind}")
+
+
+def _aggregation_direction(target: str) -> str:
+    return "min" if target == "Km" else "max"
+
+
+def _select_expected_child(values: list[float | None], target: str) -> tuple[int, float] | None:
+    successful = [(index, value) for index, value in enumerate(values) if value is not None]
+    if not successful:
+        return None
+    if _aggregation_direction(target) == "min":
+        return min(successful, key=lambda item: item[1])
+    return max(successful, key=lambda item: item[1])
+
+
+def _sequence_extra_items(row: dict, target: str) -> list | None:
+    return _json_cell_array(row.get(f"Extra Info {target}"))
+
+
+def _extra_selected_indices(extra_items: list | None) -> list[int]:
+    if not isinstance(extra_items, list):
+        return []
+    return [
+        index
+        for index, item in enumerate(extra_items)
+        if isinstance(item, dict) and item.get("selected")
+    ]
+
+
+def _extra_selected_substrate_pairs(extra_items: list | None) -> list[tuple[int, int]]:
+    selected: list[tuple[int, int]] = []
+    if not isinstance(extra_items, list):
+        return selected
+    for sequence_index, sequence_item in enumerate(extra_items):
+        if not isinstance(sequence_item, dict):
+            continue
+        substrates = sequence_item.get("substrates")
+        if not isinstance(substrates, list):
+            continue
+        for substrate_index, substrate_item in enumerate(substrates):
+            if isinstance(substrate_item, dict) and substrate_item.get("selected"):
+                selected.append((sequence_index, substrate_index))
+    return selected
+
+
+def _compare_multimer_scalar_target(
+    *,
+    label: str,
+    target: str,
+    control: dict,
+    multimer: dict,
+) -> None:
+    control_column = _prediction_column(control, target)
+    multimer_column = _prediction_column(multimer, target)
+    if not check(
+        f"[{label}] {target} prediction columns found",
+        bool(control_column and multimer_column),
+    ):
+        return
+
+    control_rows = control.get("data", [])
+    multimer_rows = multimer.get("data", [])
+    if not check(
+        f"[{label}] scalar comparison rows present",
+        len(control_rows) == 2 and len(multimer_rows) == 1,
+    ):
+        return
+
+    controls = [_finite_api_number(row.get(control_column)) for row in control_rows]
+    expected_child = _select_expected_child(controls, target)
+    aggregate = multimer_rows[0].get(multimer_column)
+    if expected_child is None:
+        check(f"[{label}] {target} aggregate blank when all controls fail", aggregate in (None, ""))
+        return
+
+    winner_index, expected = expected_child
+    check(
+        f"[{label}] {target} aggregate matches {_aggregation_direction(target)} control",
+        _numbers_match(aggregate, expected),
+        f"controls={controls}, aggregate={aggregate}",
+    )
+    check(
+        f"[{label}] {target} winning source propagated",
+        multimer_rows[0].get(f"Source {target}")
+        == control_rows[winner_index].get(f"Source {target}"),
+    )
+    extra_items = _sequence_extra_items(multimer_rows[0], target)
+    if check(f"[{label}] {target} Extra Info is sequence array", isinstance(extra_items, list)):
+        seqs = _multimer_test_sequences()
+        check(f"[{label}] {target} Extra Info has both sequences", len(extra_items) == 2)
+        check(
+            f"[{label}] {target} Extra Info preserves sequence order",
+            [item.get("sequence") for item in extra_items] == seqs,
+        )
+        check(
+            f"[{label}] {target} Extra Info predictions match scalar controls",
+            len(extra_items) == len(controls)
+            and all(
+                _numbers_match(item.get("prediction"), controls[index])
+                for index, item in enumerate(extra_items)
+            ),
+        )
+        check(
+            f"[{label}] {target} Extra Info marks earliest winner",
+            _extra_selected_indices(extra_items) == [winner_index],
+        )
+
+
+def _compare_multimer_multi_sub_target(
+    *,
+    label: str,
+    target: str,
+    control: dict,
+    multimer: dict,
+) -> None:
+    control_column = _prediction_column(control, target)
+    multimer_column = _prediction_column(multimer, target)
+    if not check(
+        f"[{label}] {target} multi-sub columns found",
+        bool(control_column and multimer_column),
+    ):
+        return
+
+    control_rows = control.get("data", [])
+    multimer_rows = multimer.get("data", [])
+    if not check(
+        f"[{label}] multi-sub comparison rows present",
+        len(control_rows) == 4 and len(multimer_rows) == 1,
+    ):
+        return
+
+    controls = [_finite_api_number(row.get(control_column)) for row in control_rows]
+    aggregate = multimer_rows[0].get(multimer_column)
+    extra_items = _sequence_extra_items(multimer_rows[0], target)
+
+    if target == "kcat":
+        expected_child = _select_expected_child(controls, target)
+        if expected_child is None:
+            check(f"[{label}] kcat aggregate blank when all controls fail", aggregate in (None, ""))
+            return
+        winner_index, expected = expected_child
+        winner_sequence = winner_index // 2
+        winner_substrate = winner_index % 2
+        check(
+            f"[{label}] kcat max over sequence×substrate controls",
+            _numbers_match(aggregate, expected),
+            f"controls={controls}, aggregate={aggregate}",
+        )
+        check(
+            f"[{label}] kcat winning source propagated",
+            multimer_rows[0].get("Source kcat") == control_rows[winner_index].get("Source kcat"),
+        )
+        if check(
+            f"[{label}] kcat Extra Info is sequence/substrate array",
+            isinstance(extra_items, list),
+        ):
+            check(
+                f"[{label}] kcat Extra Info marks winning sequence/substrate",
+                _extra_selected_substrate_pairs(extra_items)
+                == [(winner_sequence, winner_substrate)],
+            )
+        _assert_multimer_multi_sub_extra(label, target, extra_items, controls)
+        return
+
+    expected_values: list[float | None] = []
+    expected_pairs: list[tuple[int, int]] = []
+    for substrate_index in range(2):
+        candidates = [
+            controls[substrate_index],
+            controls[2 + substrate_index],
+        ]
+        selected = _select_expected_child(candidates, target)
+        if selected is None:
+            expected_values.append(None)
+            continue
+        selected_sequence, expected_value = selected
+        expected_values.append(expected_value)
+        expected_pairs.append((selected_sequence, substrate_index))
+
+    aggregate_array = _json_cell_array(aggregate)
+    if not check(
+        f"[{label}] {target} aggregate is substrate JSON array",
+        isinstance(aggregate_array, list),
+    ):
+        return
+    check(
+        f"[{label}] {target} array matches per-substrate sequence reduction",
+        len(aggregate_array) == len(expected_values)
+        and all(
+            _numbers_match(aggregate_array[index], expected_values[index])
+            for index in range(len(expected_values))
+        ),
+        f"expected={expected_values}, aggregate={aggregate_array}",
+    )
+    _assert_multimer_multi_sub_extra(label, target, extra_items, controls)
+    check(
+        f"[{label}] {target} Extra Info marks per-substrate winners",
+        sorted(_extra_selected_substrate_pairs(extra_items)) == sorted(expected_pairs),
+    )
+
+
+def _assert_multimer_multi_sub_extra(
+    label: str,
+    target: str,
+    extra_items: list | None,
+    controls: list[float | None],
+) -> None:
+    if not check(f"[{label}] {target} Extra Info is sequence array", isinstance(extra_items, list)):
+        return
+    seqs = _multimer_test_sequences()
+    check(f"[{label}] {target} Extra Info has both sequences", len(extra_items) == 2)
+    check(
+        f"[{label}] {target} Extra Info preserves sequence order",
+        [item.get("sequence") for item in extra_items] == seqs,
+    )
+    expected_substrates = ["CCO", "C1CCCCC1"]
+    shape_ok = True
+    values_ok = True
+    for sequence_index, item in enumerate(extra_items):
+        substrates = item.get("substrates") if isinstance(item, dict) else None
+        if not isinstance(substrates, list) or len(substrates) != 2:
+            shape_ok = False
+            values_ok = False
+            continue
+        if [sub.get("substrate") for sub in substrates] != expected_substrates:
+            shape_ok = False
+        for substrate_index, substrate_item in enumerate(substrates):
+            control_index = sequence_index * 2 + substrate_index
+            if not _numbers_match(substrate_item.get("prediction"), controls[control_index]):
+                values_ok = False
+    check(f"[{label}] {target} Extra Info preserves substrate order", shape_ok)
+    check(f"[{label}] {target} Extra Info values match controls", values_ok)
+
+
+def _multimer_expanded_targets(method_meta: dict) -> list[str]:
+    target_order = ["kcat", "Km", "kcat/Km"]
+    behaviors = method_meta.get("inputBehaviorByTarget", {})
+    return [
+        target
+        for target in target_order
+        if target in method_meta.get("supports", [])
+        and behaviors.get(target, "expanded_pair") == "expanded_pair"
+    ]
+
+
+def _test_multimer_for_expanded_method(
+    base: str,
+    headers: dict,
+    method_key: str,
+    method_meta: dict,
+    poll_timeout: int,
+) -> None:
+    targets = _multimer_expanded_targets(method_meta)
+    if not targets:
+        return
+    selected_methods = {target: method_key for target in targets}
+
+    label = f"multimer/{method_key}/scalar"
+    scalar_control = _submit_wait_json_result(
+        base,
+        headers,
+        label=f"{label}/control",
+        csv_content=_multimer_csv("scalar_control"),
+        targets=targets,
+        methods=selected_methods,
+        poll_timeout=poll_timeout,
+    )
+    scalar_multimer = _submit_wait_json_result(
+        base,
+        headers,
+        label=f"{label}/combined",
+        csv_content=_multimer_csv("scalar_multimer"),
+        targets=targets,
+        methods=selected_methods,
+        poll_timeout=poll_timeout,
+    )
+    if scalar_control and scalar_multimer:
+        row = scalar_multimer.get("data", [{}])[0]
+        check(
+            f"[{label}] input Protein Sequence preserved",
+            row.get("Protein Sequence") == _multimer_sequence_value(),
+        )
+        for target in targets:
+            _compare_multimer_scalar_target(
+                label=label,
+                target=target,
+                control=scalar_control,
+                multimer=scalar_multimer,
+            )
+
+    edge_targets = targets
+    edge_label = f"multimer/{method_key}/multi-sub"
+    multi_control = _submit_wait_json_result(
+        base,
+        headers,
+        label=f"{edge_label}/control-grid",
+        csv_content=_multimer_csv("multi_sub_control"),
+        targets=edge_targets,
+        methods={target: method_key for target in edge_targets},
+        poll_timeout=poll_timeout,
+    )
+    multi_multimer = _submit_wait_json_result(
+        base,
+        headers,
+        label=f"{edge_label}/combined",
+        csv_content=_multimer_csv("multi_sub_multimer"),
+        targets=edge_targets,
+        methods={target: method_key for target in edge_targets},
+        poll_timeout=poll_timeout,
+    )
+    if multi_control and multi_multimer:
+        row = multi_multimer.get("data", [{}])[0]
+        check(
+            f"[{edge_label}] input Protein Sequence preserved",
+            row.get("Protein Sequence") == _multimer_sequence_value(),
+        )
+        check(f"[{edge_label}] Substrates preserved", row.get("Substrates") == "CCO;C1CCCCC1")
+        for target in edge_targets:
+            _compare_multimer_multi_sub_target(
+                label=edge_label,
+                target=target,
+                control=multi_control,
+                multimer=multi_multimer,
+            )
+
+
+def _test_multimer_catpred_native_kcat(
+    base: str,
+    headers: dict,
+    method_meta: dict,
+    poll_timeout: int,
+) -> None:
+    if "kcat" not in method_meta.get("supports", []):
+        return
+    if method_meta.get("inputBehaviorByTarget", {}).get("kcat") != "native_multi":
+        return
+
+    label = "multimer/CatPred/native-kcat"
+    control = _submit_wait_json_result(
+        base,
+        headers,
+        label=f"{label}/control",
+        csv_content=_multimer_csv("native_multi_control"),
+        targets=["kcat"],
+        methods={"kcat": "CatPred"},
+        poll_timeout=poll_timeout,
+    )
+    multimer = _submit_wait_json_result(
+        base,
+        headers,
+        label=f"{label}/combined",
+        csv_content=_multimer_csv("native_multi_multimer"),
+        targets=["kcat"],
+        methods={"kcat": "CatPred"},
+        poll_timeout=poll_timeout,
+    )
+    if not (control and multimer):
+        return
+    _compare_multimer_scalar_target(
+        label=label,
+        target="kcat",
+        control=control,
+        multimer=multimer,
+    )
+    check(
+        f"[{label}] native combined Substrates preserved",
+        multimer["data"][0].get("Substrates") == "CCO;C1CCCCC1",
+    )
+
+
+def _test_multimer_full_reaction_method(
+    base: str,
+    headers: dict,
+    method_key: str,
+    method_meta: dict,
+    poll_timeout: int,
+) -> None:
+    if method_meta.get("inputBehaviorByTarget", {}).get("kcat") != "native_full_reaction":
+        return
+    label = f"multimer/{method_key}/full-reaction"
+    control = _submit_wait_json_result(
+        base,
+        headers,
+        label=f"{label}/control",
+        csv_content=_multimer_csv("full_control"),
+        targets=["kcat"],
+        methods={"kcat": method_key},
+        poll_timeout=poll_timeout,
+    )
+    multimer = _submit_wait_json_result(
+        base,
+        headers,
+        label=f"{label}/combined",
+        csv_content=_multimer_csv("full_multimer"),
+        targets=["kcat"],
+        methods={"kcat": method_key},
+        poll_timeout=poll_timeout,
+    )
+    if not (control and multimer):
+        return
+    _compare_multimer_scalar_target(
+        label=label,
+        target="kcat",
+        control=control,
+        multimer=multimer,
+    )
+    row = multimer.get("data", [{}])[0]
+    check(f"[{label}] Substrates preserved", row.get("Substrates") == "CCO;C1CCCCC1")
+    check(f"[{label}] Products preserved", row.get("Products") == "CC=O;O")
+
+
+def test_multimer_for_methods(
+    base: str,
+    headers: dict,
+    methods: set,
+    poll_timeout: int,
+) -> None:
+    """Compare scalar controls with semicolon-separated protein sequence inputs."""
+    section("Multi-Sequence protein input — value-level verification")
+    metadata = _fetch_method_metadata(base)
+    if not metadata:
+        return
+
+    for method_key, method_meta in sorted(metadata.items()):
+        if method_key.lower() not in methods:
+            continue
+        if method_key == "CatPred":
+            _test_multimer_catpred_native_kcat(base, headers, method_meta, poll_timeout)
+            _test_multimer_for_expanded_method(base, headers, method_key, method_meta, poll_timeout)
+            continue
+        if any(
+            behavior == "native_full_reaction"
+            for behavior in method_meta.get("inputBehaviorByTarget", {}).values()
+        ):
+            _test_multimer_full_reaction_method(
+                base,
+                headers,
+                method_key,
+                method_meta,
+                poll_timeout,
+            )
+            continue
+        _test_multimer_for_expanded_method(base, headers, method_key, method_meta, poll_timeout)
 
 
 def test_recon_xkg_transparency(
@@ -1748,7 +2310,7 @@ def main():
     parser.add_argument(
         "--poll-timeout",
         type=int,
-        default=1000,
+        default=10000,
         metavar="SECONDS",
         help="Seconds to wait per submitted method job before marking "
         "that job as failed (default: 1000)",
@@ -1777,6 +2339,22 @@ def main():
             "Focused run: ONLY execute the multi-substrate value-level checks "
             "(same as --test-multi-sub-for-single-sub-methods) against the fixed/"
             "cached sequences, and skip every other test group. Implies that flag."
+        ),
+    )
+    parser.add_argument(
+        "--test-multimer",
+        action="store_true",
+        help=(
+            "Run slow value-level multi-sequence protein tests for every selected method. "
+            "Compares scalar single-sequence controls with semicolon-combined sequence rows."
+        ),
+    )
+    parser.add_argument(
+        "--only-multimer",
+        action="store_true",
+        help=(
+            "Focused run: ONLY execute the multi-sequence protein value-level checks "
+            "and skip every other test group. Implies --test-multimer."
         ),
     )
     parser.add_argument(
@@ -1842,11 +2420,23 @@ def main():
         )
         return _print_summary()
 
+    if args.only_multimer:
+        print("  Mode     : ONLY multi-sequence protein value verification")
+        print("=" * 70)
+        test_multimer_for_methods(
+            base,
+            headers,
+            methods,
+            poll_timeout=args.poll_timeout,
+        )
+        return _print_summary()
+
     print(f"  Variants : {'extra' if args.extra_submit_variants else 'minimal'}")
     print(
         "  Multi-sub: "
         + ("value verification enabled" if args.test_multi_sub_for_single_sub_methods else "skip")
     )
+    print("  Multimer : " + ("value verification enabled" if args.test_multimer else "skip"))
     print(f"  GPU tests: {'skip' if args.skip_gpu else 'auto (runs if GPU online)'}")
     print("=" * 70)
 
@@ -1895,6 +2485,16 @@ def main():
             "\n  (skipping multi-substrate value tests — pass "
             "--test-multi-sub-for-single-sub-methods to run them)"
         )
+
+    if args.test_multimer:
+        test_multimer_for_methods(
+            base,
+            headers,
+            methods,
+            poll_timeout=args.poll_timeout,
+        )
+    else:
+        print("\n  (skipping multi-sequence protein tests — pass --test-multimer to run them)")
 
     # Validate endpoint — fast checks (no similarity)
     test_validate(base, headers)

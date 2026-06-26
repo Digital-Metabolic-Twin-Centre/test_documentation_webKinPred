@@ -45,7 +45,11 @@ def _embedding_defaults(method_key: str, target: str) -> dict[str, Any]:
     }
 
 
-def initialise_job_progress_stages(job: Job, targets: list[str], desc_by_target: dict[str, Any]) -> None:
+def initialise_job_progress_stages(
+    job: Job,
+    targets: list[str],
+    desc_by_target: dict[str, Any],
+) -> None:
     """
     Replace any existing stage rows for this job with fresh pending rows.
     """
@@ -94,7 +98,11 @@ def mark_stage_running(job_public_id: str, target: str, method_key: str | None =
 
 def mark_stage_completed(job_public_id: str, target: str, method_key: str | None = None) -> None:
     now = timezone.now()
-    stage = _stage_queryset(job_public_id=job_public_id, target=target, method_key=method_key).first()
+    stage = _stage_queryset(
+        job_public_id=job_public_id,
+        target=target,
+        method_key=method_key,
+    ).first()
     if stage is None:
         return
 
@@ -122,7 +130,11 @@ def mark_stage_failed(
     }
     if message:
         updates["message"] = str(message)
-    _stage_queryset(job_public_id=job_public_id, target=target, method_key=method_key).update(**updates)
+    _stage_queryset(
+        job_public_id=job_public_id,
+        target=target,
+        method_key=method_key,
+    ).update(**updates)
 
 
 def mark_running_stage_failed(job_public_id: str, message: str | None = None) -> None:
@@ -142,15 +154,20 @@ def mark_running_stage_failed(job_public_id: str, message: str | None = None) ->
         running_qs.update(**updates)
         return
 
-    pending_qs = JobProgressStage.objects.filter(job__public_id=job_public_id, status="pending").order_by(
-        "stage_index"
-    )
+    pending_qs = JobProgressStage.objects.filter(
+        job__public_id=job_public_id,
+        status="pending",
+    ).order_by("stage_index")
     pending_stage = pending_qs.first()
     if pending_stage is not None:
         JobProgressStage.objects.filter(pk=pending_stage.pk).update(**updates)
         return
 
-    last_stage = JobProgressStage.objects.filter(job__public_id=job_public_id).order_by("-stage_index").first()
+    last_stage = (
+        JobProgressStage.objects.filter(job__public_id=job_public_id)
+        .order_by("-stage_index")
+        .first()
+    )
     if last_stage is not None:
         JobProgressStage.objects.filter(pk=last_stage.pk).update(**updates)
 
@@ -163,7 +180,30 @@ def reset_stage_prediction_metrics(
     total_rows: int,
 ) -> None:
     now = timezone.now()
-    _stage_queryset(job_public_id=job_public_id, target=target, method_key=method_key).update(
+    qs = _stage_queryset(job_public_id=job_public_id, target=target, method_key=method_key)
+    stage = qs.first()
+    if _has_cached_prediction_progress_context(stage, total_rows):
+        qs.update(
+            status="running",
+            started_at=now,
+            completed_at=None,
+            molecules_total=int(stage.molecules_total),
+            molecules_processed=int(stage.molecules_processed),
+            invalid_rows=int(stage.invalid_rows),
+            predictions_total=int(stage.predictions_total),
+            predictions_made=int(stage.predictions_made),
+            updated_at=now,
+        )
+        Job.objects.filter(public_id=job_public_id).update(
+            total_molecules=int(stage.molecules_total),
+            molecules_processed=int(stage.molecules_processed),
+            invalid_rows=int(stage.invalid_rows),
+            total_predictions=int(stage.predictions_total),
+            predictions_made=int(stage.predictions_made),
+        )
+        return
+
+    qs.update(
         status="running",
         started_at=now,
         completed_at=None,
@@ -214,14 +254,25 @@ def set_stage_prediction_total(
 ) -> None:
     total_predictions = int(total_predictions)
     now = timezone.now()
-    _stage_queryset(job_public_id=job_public_id, target=target, method_key=method_key).update(
-        predictions_total=total_predictions,
-        predictions_made=0,
+    qs = _stage_queryset(job_public_id=job_public_id, target=target, method_key=method_key)
+    stage = qs.first()
+    predictions_made = 0
+    if _has_cached_prediction_progress_context(stage, total_predictions):
+        full_total = int(stage.predictions_total)
+        predictions_made = min(
+            full_total,
+            max(int(stage.predictions_made), full_total - total_predictions),
+        )
+        total_predictions = full_total
+
+    qs.update(
+        predictions_total=int(total_predictions),
+        predictions_made=int(predictions_made),
         updated_at=now,
     )
     Job.objects.filter(public_id=job_public_id).update(
-        total_predictions=total_predictions,
-        predictions_made=0,
+        total_predictions=int(total_predictions),
+        predictions_made=int(predictions_made),
     )
 
 
@@ -234,6 +285,15 @@ def set_stage_prediction_progress(
     total: int | None = None,
 ) -> None:
     done = int(done)
+    if total is not None:
+        total = int(total)
+        stage = _stage_queryset(
+            job_public_id=job_public_id,
+            target=target,
+            method_key=method_key,
+        ).first()
+        done, total = _scale_cached_prediction_progress(stage, done, total)
+
     now = timezone.now()
     stage_updates: dict[str, Any] = {
         "predictions_made": done,
@@ -250,6 +310,42 @@ def set_stage_prediction_progress(
         **stage_updates
     )
     Job.objects.filter(public_id=job_public_id).update(**job_updates)
+
+
+def _has_cached_prediction_progress_context(stage: Any, incoming_total: int) -> bool:
+    """Return true when a partial ReconXKG cache hit seeded full-stage progress."""
+    if stage is None:
+        return False
+    try:
+        full_total = int(stage.predictions_total)
+        current_done = int(stage.predictions_made)
+        molecules_total = int(stage.molecules_total)
+        molecules_processed = int(stage.molecules_processed)
+        incoming = int(incoming_total)
+    except (TypeError, ValueError):
+        return False
+    if incoming < 0 or full_total <= incoming:
+        return False
+    offset = max(0, full_total - incoming)
+    if current_done >= offset:
+        return True
+    return molecules_total == full_total and molecules_processed >= full_total
+
+
+def _scale_cached_prediction_progress(
+    stage: Any,
+    done: int,
+    total: int,
+) -> tuple[int, int]:
+    """Map miss-only subprocess progress onto the full cached+miss denominator."""
+    if not _has_cached_prediction_progress_context(stage, total):
+        return max(0, int(done)), max(0, int(total))
+
+    full_total = int(stage.predictions_total)
+    miss_total = max(0, int(total))
+    offset = max(0, full_total - miss_total)
+    scaled_done = min(full_total, offset + max(0, int(done)))
+    return scaled_done, full_total
 
 
 def set_stage_prediction_snapshot(
@@ -345,7 +441,8 @@ def get_progress_stages(job: Job) -> list[dict[str, Any]]:
         }
         embedding = {
             "enabled": bool(stage.embedding_enabled),
-            "state": stage.embedding_state or ("not_required" if not stage.embedding_enabled else "pending"),
+            "state": stage.embedding_state
+            or ("not_required" if not stage.embedding_enabled else "pending"),
             "method_key": stage.embedding_method_key or stage.method_key,
             "methodKey": stage.embedding_method_key or stage.method_key,
             "target": stage.embedding_target or stage.target,

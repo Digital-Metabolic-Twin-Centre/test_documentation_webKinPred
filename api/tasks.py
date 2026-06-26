@@ -1282,6 +1282,18 @@ def _invoke_method_prediction_cached(
         )
 
     if miss_indices:
+        set_stage_prediction_snapshot(
+            job_public_id=public_id,
+            target=target,
+            method_key=desc.key,
+            molecules_total=n,
+            molecules_processed=hit_count,
+            invalid_rows=len(invalid),
+            predictions_total=n,
+            predictions_made=hit_count,
+        )
+
+    if miss_indices:
         # Slice only the positionally-aligned (per-row) kwargs; pass scalar
         # kwargs (target flags, cleanup toggles) through unchanged.
         aligned = set(desc.col_to_kwarg.values())
@@ -1361,7 +1373,6 @@ def _invoke_method_prediction_cached(
 
     # Reflect full unit counts in progress so a (partly) cached stage does not
     # under-report after the engine streamed only the miss subset.
-    successful = sum(1 for value in predictions if not _prediction_is_missing(value))
     set_stage_prediction_snapshot(
         job_public_id=public_id,
         target=target,
@@ -1370,7 +1381,7 @@ def _invoke_method_prediction_cached(
         molecules_processed=n,
         invalid_rows=len(invalid),
         predictions_total=n,
-        predictions_made=successful,
+        predictions_made=n,
     )
 
     return predictions, invalid

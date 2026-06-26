@@ -19,9 +19,18 @@ try:
     import pandas as pd
 
     django.setup()
+    from django.test import TestCase
+    from api.models import Job, JobProgressStage
     from api.services.job_service import (
         _try_complete_recon_xkg_job,
         process_job_submission_from_params,
+    )
+    from api.services.job_progress_service import (
+        increment_stage_validation,
+        reset_stage_prediction_metrics,
+        set_stage_prediction_progress,
+        set_stage_prediction_snapshot,
+        set_stage_prediction_total,
     )
     from api.services.prediction_batch_service import (
         build_sequence_batch_plan,
@@ -38,6 +47,7 @@ try:
     _IMPORT_ERROR = None
 except ModuleNotFoundError as exc:
     _IMPORT_ERROR = exc
+    TestCase = unittest.TestCase
 
 
 class _Descriptor:
@@ -165,7 +175,7 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(result.snapshot.predictions, {"a": 1.0, "b": 2.0})
         self.assertEqual(result.snapshot.similarities, {"AAA": (4.0, 8.0)})
 
-    def test_preflight_similarity_uses_split_sequences(self):
+    def test_preflight_similarity_uses_cached_winning_sequence(self):
         dataframe = pd.DataFrame(
             {"Protein Sequence": ["AAA;CCC"], "Substrates": ["C"]}
         )
@@ -180,7 +190,7 @@ class PreflightTests(unittest.TestCase):
             return_value="Pair data",
         ), patch(
             "api.services.recon_xkg_preflight_service.prediction_store.get_similarity_many",
-            return_value={"AAA": (4.0, 8.0), "CCC": (5.0, 9.0)},
+            return_value={"CCC": (5.0, 9.0)},
         ) as get_similarity:
             result = preflight_recon_xkg_cache(
                 dataframe=dataframe,
@@ -193,7 +203,46 @@ class PreflightTests(unittest.TestCase):
             )
 
         self.assertTrue(result.complete)
-        self.assertEqual(set(get_similarity.call_args.args[0]), {"AAA", "CCC"})
+        self.assertEqual(set(get_similarity.call_args.args[0]), {"CCC"})
+        self.assertEqual(result.snapshot.similarities, {"CCC": (5.0, 9.0)})
+
+    def test_preflight_similarity_accepts_cached_invalid_loser(self):
+        from api.services.prediction_store import CachedFailure
+
+        dataframe = pd.DataFrame(
+            {"Protein Sequence": ["AXZ;CCC;AAA"], "Substrates": ["C"]}
+        )
+        reason = "Invalid protein sequence (unsupported amino acid characters)"
+        with patch(
+            "api.services.recon_xkg_preflight_service.prediction_store.build_unit_keys",
+            return_value=(["bad", "winner", "loser"], [None, None, None], "fp"),
+        ), patch(
+            "api.services.recon_xkg_preflight_service.prediction_store.get_many",
+            return_value={
+                "bad": CachedFailure(reason),
+                "winner": 12.0,
+                "loser": 0.2,
+            },
+        ), patch(
+            "api.services.recon_xkg_preflight_service.similarity_cache_label_for_method",
+            return_value="Pair data",
+        ), patch(
+            "api.services.recon_xkg_preflight_service.prediction_store.get_similarity_many",
+            return_value={"CCC": (5.0, 9.0)},
+        ) as get_similarity:
+            result = preflight_recon_xkg_cache(
+                dataframe=dataframe,
+                targets=["kcat"],
+                descriptors={"kcat": self.descriptor},
+                handle_long_sequences="truncate",
+                canonicalize_substrates=True,
+                include_similarity_columns=True,
+                job_public_id="job-1",
+            )
+
+        self.assertTrue(result.complete)
+        self.assertEqual(set(get_similarity.call_args.args[0]), {"CCC"})
+        self.assertEqual(result.snapshot.predictions["bad"], CachedFailure(reason))
 
     def test_one_missing_or_uncacheable_unit_forces_queue_path(self):
         for keys, cached, expected_reason in [
@@ -287,6 +336,114 @@ class PreflightTests(unittest.TestCase):
             )
         self.assertFalse(unreadable.complete)
         self.assertEqual(unreadable.reason, "cache-read-error")
+
+
+@unittest.skipIf(_IMPORT_ERROR is not None, f"Server dependencies unavailable: {_IMPORT_ERROR}")
+class ReconXkgProgressScalingTests(TestCase):
+    def setUp(self):
+        self.job = Job.objects.create(
+            public_id="job-p",
+            prediction_type="kcat",
+            status="Processing",
+        )
+        JobProgressStage.objects.create(
+            job=self.job,
+            stage_index=0,
+            target="kcat",
+            method_key="TurNup",
+            method_display_name="TurNup",
+            status="running",
+        )
+
+    def _stage(self):
+        return JobProgressStage.objects.get(job=self.job, target="kcat")
+
+    def test_partial_cache_progress_uses_full_denominator(self):
+        set_stage_prediction_snapshot(
+            job_public_id=self.job.public_id,
+            target="kcat",
+            method_key="TurNup",
+            molecules_total=100,
+            molecules_processed=90,
+            invalid_rows=0,
+            predictions_total=100,
+            predictions_made=90,
+        )
+
+        reset_stage_prediction_metrics(
+            job_public_id=self.job.public_id,
+            target="kcat",
+            method_key="TurNup",
+            total_rows=10,
+        )
+        stage = self._stage()
+        self.assertEqual(stage.predictions_total, 100)
+        self.assertEqual(stage.predictions_made, 90)
+        self.assertEqual(stage.molecules_total, 100)
+        self.assertEqual(stage.molecules_processed, 90)
+
+        increment_stage_validation(
+            job_public_id=self.job.public_id,
+            target="kcat",
+            method_key="TurNup",
+            processed_inc=10,
+            invalid_inc=2,
+        )
+        set_stage_prediction_total(
+            job_public_id=self.job.public_id,
+            target="kcat",
+            method_key="TurNup",
+            total_predictions=8,
+        )
+        stage = self._stage()
+        self.assertEqual(stage.predictions_total, 100)
+        self.assertEqual(stage.predictions_made, 92)
+
+        set_stage_prediction_progress(
+            job_public_id=self.job.public_id,
+            target="kcat",
+            method_key="TurNup",
+            done=4,
+            total=8,
+        )
+        stage = self._stage()
+        self.assertEqual(stage.predictions_total, 100)
+        self.assertEqual(stage.predictions_made, 96)
+
+        set_stage_prediction_progress(
+            job_public_id=self.job.public_id,
+            target="kcat",
+            method_key="TurNup",
+            done=8,
+            total=8,
+        )
+        stage = self._stage()
+        self.assertEqual(stage.predictions_total, 100)
+        self.assertEqual(stage.predictions_made, 100)
+
+    def test_normal_progress_is_not_scaled(self):
+        reset_stage_prediction_metrics(
+            job_public_id=self.job.public_id,
+            target="kcat",
+            method_key="TurNup",
+            total_rows=10,
+        )
+        set_stage_prediction_total(
+            job_public_id=self.job.public_id,
+            target="kcat",
+            method_key="TurNup",
+            total_predictions=8,
+        )
+        set_stage_prediction_progress(
+            job_public_id=self.job.public_id,
+            target="kcat",
+            method_key="TurNup",
+            done=4,
+            total=8,
+        )
+        stage = self._stage()
+        self.assertEqual(stage.predictions_total, 8)
+        self.assertEqual(stage.predictions_made, 4)
 
 
 @unittest.skipIf(_IMPORT_ERROR is not None, f"Server dependencies unavailable: {_IMPORT_ERROR}")
