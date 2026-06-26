@@ -1,4 +1,23 @@
+<div align="center">
+
 # Open Kinetics Predictor
+
+**Predict enzyme kinetic parameters (<i>k<sub>cat</sub></i> and <i>K<sub>M</sub></i>) from protein sequence and substrate SMILES.**
+
+[![Live Service](https://img.shields.io/badge/live-predictor.openkinetics.org-success)](https://predictor.openkinetics.org/)
+[![License](https://img.shields.io/github/license/openKinetics/webKinPred)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/openKinetics/webKinPred?style=social)](https://github.com/your-org/open-kinetics-predictor/stargazers)
+[![Forks](https://img.shields.io/github/forks/openKinetics/webKinPred?style=social)](https://github.com/your-org/open-kinetics-predictor/network/members)
+[![Python](https://img.shields.io/badge/python-3.11+-blue?logo=python&logoColor=white)](https://www.python.org/)
+[![Django](https://img.shields.io/badge/Django-5.1-092E20?logo=django&logoColor=white)](https://www.djangoproject.com/)
+[![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
+
+[Live Demo](https://predictor.openkinetics.org/) ·
+[API Docs](https://predictor.openkinetics.org/api-docs) ·
+[Contributing](docs/CONTRIBUTING.md)
+
+</div>
 
 Open Kinetics Predictor is a production web interface for predicting enzyme kinetic parameters (kcat and KM) from protein sequence and substrate SMILES. It consolidates several state‑of‑the‑art machine learning / deep learning models behind a unified, asynchronous job API so you can submit sequences and retrieve structured predictions.
 
