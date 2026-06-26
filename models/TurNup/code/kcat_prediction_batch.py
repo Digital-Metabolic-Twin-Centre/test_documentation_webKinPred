@@ -35,14 +35,28 @@ elif Path("/app/models/TurNup/data").exists():
 else:
     data_dir = str((_HERE.parents[1] / "data").resolve())
 SEQ_VEC_DIR = str((_media_path / "sequence_info" / "esm1b_turnup").resolve())
+PREDICTION_BATCH_SIZE = 128
 
 
 def kcat_prediction_batch(substrates, products, enzymes):
     """
-    Process predictions one by one to avoid RAM issues.
+    Process predictions in bounded chunks to avoid RAM issues.
     Load ESM1b model only if there are sequences that need embedding.
     """
-    print("Step 1/3: Loading XGBoost model...")
+    total_predictions = len(substrates)
+    if total_predictions == 0:
+        df_output = pd.DataFrame(
+            {
+                "substrates": substrates,
+                "products": products,
+                "enzyme": enzymes,
+                "kcat [s^(-1)]": [],
+            }
+        )
+        df_output["complete"] = []
+        return df_output
+
+    print("Step 1/4: Loading XGBoost model...")
     # Load XGBoost model once
     bst = pickle.load(
         open(
@@ -52,12 +66,13 @@ def kcat_prediction_batch(substrates, products, enzymes):
     )
 
     # Check if we need to load ESM1b model by doing a quick pass
-    print("Step 2/3: Checking if ESM1b model is needed...")
+    print("Step 2/4: Checking if ESM1b model is needed...")
     esm_model = None
     batch_converter = None
     esm_needed = False
 
-    check_df = preprocess_enzymes([str(enzyme).upper() for enzyme in enzymes])
+    enzyme_upper_by_row = [str(enzyme).upper() for enzyme in enzymes]
+    check_df = preprocess_enzymes(enzyme_upper_by_row)
     check_ids = resolve_seq_ids_via_cli(check_df["model_input"].tolist())
     missing_ids, _ready_ids = resolve_missing_ids(
         check_ids,
@@ -73,62 +88,87 @@ def kcat_prediction_batch(substrates, products, enzymes):
     else:
         print("All sequences already cached - ESM1b model not needed!")
 
-    predictions = []
-    total_predictions = len(substrates)
+    predictions = [None] * total_predictions
 
-    print("Step 3/3: Processing predictions one by one...")
-    for i, (substrate, product, enzyme) in enumerate(
-        zip(substrates, products, enzymes)
-    ):
+    print("Step 3/4: Loading enzyme representations...")
+    df_enzyme = calcualte_esm1b_ts_vectors(
+        enzyme_list=list(dict.fromkeys(enzyme_upper_by_row)),
+        esm_model=esm_model,
+        batch_converter=batch_converter,
+    )
+    enzyme_rep_by_sequence = {
+        str(sequence): rep
+        for sequence, rep in zip(
+            df_enzyme["amino acid sequence"], df_enzyme["enzyme rep"]
+        )
+    }
+
+    # The ESM model is no longer needed after all sequence vectors are available.
+    esm_model = None
+    batch_converter = None
+    df_enzyme = None
+    gc.collect()
+
+    print(
+        f"Step 4/4: Processing predictions in batches of {PREDICTION_BATCH_SIZE}..."
+    )
+    for start in range(0, total_predictions, PREDICTION_BATCH_SIZE):
+        end = min(start + PREDICTION_BATCH_SIZE, total_predictions)
+        chunk_substrates = substrates[start:end]
+        chunk_products = products[start:end]
+        chunk_enzymes = enzyme_upper_by_row[start:end]
+        df_reaction = None
+        X = None
+        dX = None
+        fingerprints = None
+        enzyme_reps = None
+
         try:
-            print(f"Progress: {i+1}/{total_predictions} predictions made", flush=True)
-
-            # Process single reaction
             df_reaction = reaction_preprocessing(
-                substrate_list=[substrate], product_list=[product]
+                substrate_list=chunk_substrates, product_list=chunk_products
             )
 
-            # Process single enzyme using pre-loaded ESM model (if available)
-            enzyme_upper = enzyme.upper()
-            df_enzyme = calcualte_esm1b_ts_vectors(
-                enzyme_list=[enzyme_upper],
-                esm_model=esm_model,
-                batch_converter=batch_converter,
-            )
+            valid_indices = []
+            fingerprints = []
+            enzyme_reps = []
 
-            # Create single row DataFrame
-            df_kcat = pd.DataFrame(
-                data={
-                    "substrates": [substrate],
-                    "products": [product],
-                    "enzyme": [enzyme_upper],
-                    "index": [0],
-                }
-            )
+            for local_idx, enzyme_upper in enumerate(chunk_enzymes):
+                diff_fp = df_reaction["difference_fp"].iloc[local_idx]
+                esm1b_rep = enzyme_rep_by_sequence.get(enzyme_upper)
 
-            # Merge reaction and enzyme data
-            df_kcat = merging_reaction_and_enzyme_df(df_reaction, df_enzyme, df_kcat)
-            df_kcat_valid = df_kcat.loc[df_kcat["complete"]]
-            df_kcat_valid.reset_index(inplace=True, drop=True)
+                if isinstance(diff_fp, str) or isinstance(esm1b_rep, str):
+                    continue
+                if diff_fp is None or esm1b_rep is None:
+                    continue
 
-            if len(df_kcat_valid) > 0:
-                # Calculate input matrix for single sample
-                X = calculate_xgb_input_matrix(df=df_kcat_valid)
+                diff_fp_array = np.asarray(diff_fp, dtype=np.float32)
+                esm1b_array = np.asarray(esm1b_rep, dtype=np.float32)
+                if diff_fp_array.shape != (2048,) or esm1b_array.shape != (1280,):
+                    continue
+
+                valid_indices.append(start + local_idx)
+                fingerprints.append(diff_fp_array)
+                enzyme_reps.append(esm1b_array)
+
+            if valid_indices:
+                X = np.concatenate(
+                    [np.stack(fingerprints), np.stack(enzyme_reps)], axis=1
+                ).astype(np.float32, copy=False)
                 dX = xgb.DMatrix(X)
-                kcat = 10 ** bst.predict(dX)[0]  # Get first (and only) prediction
-                predictions.append(kcat)
-            else:
-                predictions.append(None)  # Invalid sample
-
-            # Clean up memory after each prediction
-            del df_reaction, df_enzyme, df_kcat, df_kcat_valid
-            if "X" in locals():
-                del X, dX
-            gc.collect()
+                kcats = 10 ** bst.predict(dX)
+                for global_idx, kcat in zip(valid_indices, kcats):
+                    predictions[global_idx] = float(kcat)
 
         except Exception as e:
-            print(f"Error processing sample {i}: {e}")
-            predictions.append(None)
+            print(f"Error processing batch {start}-{end}: {e}")
+        finally:
+            print(f"Progress: {end}/{total_predictions} predictions made", flush=True)
+            df_reaction = None
+            X = None
+            dX = None
+            fingerprints = None
+            enzyme_reps = None
+            gc.collect()
 
     df_output = pd.DataFrame(
         {
