@@ -164,13 +164,6 @@ def validate_required_columns_for_methods(
     if has_products and not has_substrates:
         return "'Products' requires a 'Substrates' column."
 
-    legacy_dot_input = False
-    if has_substrate:
-        substrate_values = dataframe["Substrate"].dropna().astype(str).str.strip()
-        legacy_dot_input = substrate_values.apply(
-            lambda value: bool(value) and not value.startswith("InChI=") and "." in value
-        ).any()
-
     missing: set[str] = set()
     if "Protein Sequence" not in dataframe.columns:
         missing.add("Protein Sequence")
@@ -191,23 +184,11 @@ def validate_required_columns_for_methods(
             if not has_products:
                 missing.add("Products")
         elif behavior == "native_multi":
-            if has_substrates:
-                continue
             if not has_substrate:
                 missing.add("Substrates")
-            elif not legacy_dot_input:
-                return (
-                    f"{desc.display_name} {target} requires semicolon-separated 'Substrates'. "
-                    "Legacy dot-joined values are accepted only in 'Substrate'."
-                )
         else:
             if not (has_substrate or has_substrates):
                 missing.add("Substrate or Substrates")
-            if has_substrate and legacy_dot_input:
-                return (
-                    "Dot-joined 'Substrate' input is supported only for legacy CatPred kcat. "
-                    "Use semicolon-separated values in 'Substrates' for per-substrate predictions."
-                )
             for col in desc.col_to_kwarg.keys():
                 if col != "Substrate" and col not in dataframe.columns:
                     missing.add(col)
