@@ -199,6 +199,9 @@ export default function HowToUseCard({ methods = {} }) {
           <div>
             <strong>Single-substrate methods also accept Multi-Substrate and Full-Reaction files.</strong>{' '}
             They predict every semicolon-separated substrate independently: k<sub>cat</sub> is set to the maximum prediction.
+            <span className="d-block mt-1">
+              <code>Protein Sequence</code> may also contain <code>;</code>-separated candidate sequences; output stays one row, using max k<sub>cat</sub>, min K<sub>M</sub>, and max k<sub>cat</sub>/K<sub>M</sub>.
+            </span>
           </div>
         </Alert>
 

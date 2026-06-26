@@ -21,6 +21,10 @@ const csvTypeLabel = csvFormatInfo?.csv_type === 'full_reaction'
   : csvFormatInfo?.csv_type === 'multi'
     ? 'multi-substrate'
     : 'single-substrate';
+const multiSequenceRows = Number(csvFormatInfo?.multi_sequence_rows || 0);
+const multiSequenceText = multiSequenceRows > 0
+  ? `, including ${multiSequenceRows} rows with multiple protein sequences`
+  : '';
   return (
     <Card className="section-container section-reaction-info mb-4">
       <Card.Header as="h3" className="text-center">
@@ -102,7 +106,7 @@ const csvTypeLabel = csvFormatInfo?.csv_type === 'full_reaction'
 
         {csvFormatValid && csvFormatInfo?.csv_type && (
           <Alert variant="success" className="mt-3">
-          Detected a <strong>{csvTypeLabel}</strong> CSV with {csvFormatInfo.num_rows} rows. You may now choose compatible methods.
+          Detected a <strong>{csvTypeLabel}</strong> CSV with {csvFormatInfo.num_rows} rows{multiSequenceText}. You may now choose compatible methods.
           </Alert>
         )}
         {!csvFormatValid && csvFormatError && (

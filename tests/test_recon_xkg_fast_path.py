@@ -114,6 +114,18 @@ class BatchPlanningTests(unittest.TestCase):
         self.assertEqual(batch.sequences, ("AAA",))
         self.assertEqual(batch.call_kwargs["substrates"], ["O"])
 
+    def test_sequence_list_expands_before_substrate_list(self):
+        dataframe = pd.DataFrame(
+            {"Protein Sequence": ["AAA;BBB"], "Substrates": ["C;O"]}
+        )
+        descriptor = _Descriptor()
+        sequence_plan = build_sequence_batch_plan(dataframe, [descriptor], "truncate")
+        batch = build_target_batch_plan(descriptor, "kcat", dataframe, sequence_plan)
+
+        self.assertEqual(batch.sequences, ("AAA", "AAA", "BBB", "BBB"))
+        self.assertEqual(batch.call_kwargs["substrates"], ["C", "O", "C", "O"])
+        self.assertIsNotNone(batch.unit_expansion)
+
 
 @unittest.skipIf(_IMPORT_ERROR is not None, f"Server dependencies unavailable: {_IMPORT_ERROR}")
 class PreflightTests(unittest.TestCase):
@@ -152,6 +164,36 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(set(get_many.call_args.args[0]), {"a", "b"})
         self.assertEqual(result.snapshot.predictions, {"a": 1.0, "b": 2.0})
         self.assertEqual(result.snapshot.similarities, {"AAA": (4.0, 8.0)})
+
+    def test_preflight_similarity_uses_split_sequences(self):
+        dataframe = pd.DataFrame(
+            {"Protein Sequence": ["AAA;CCC"], "Substrates": ["C"]}
+        )
+        with patch(
+            "api.services.recon_xkg_preflight_service.prediction_store.build_unit_keys",
+            return_value=(["a", "b"], [None, None], "fp"),
+        ), patch(
+            "api.services.recon_xkg_preflight_service.prediction_store.get_many",
+            return_value={"a": 1.0, "b": 2.0},
+        ), patch(
+            "api.services.recon_xkg_preflight_service.similarity_cache_label_for_method",
+            return_value="Pair data",
+        ), patch(
+            "api.services.recon_xkg_preflight_service.prediction_store.get_similarity_many",
+            return_value={"AAA": (4.0, 8.0), "CCC": (5.0, 9.0)},
+        ) as get_similarity:
+            result = preflight_recon_xkg_cache(
+                dataframe=dataframe,
+                targets=["kcat"],
+                descriptors={"kcat": self.descriptor},
+                handle_long_sequences="truncate",
+                canonicalize_substrates=True,
+                include_similarity_columns=True,
+                job_public_id="job-1",
+            )
+
+        self.assertTrue(result.complete)
+        self.assertEqual(set(get_similarity.call_args.args[0]), {"AAA", "CCC"})
 
     def test_one_missing_or_uncacheable_unit_forces_queue_path(self):
         for keys, cached, expected_reason in [

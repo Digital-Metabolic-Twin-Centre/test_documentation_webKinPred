@@ -6,6 +6,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
 from django.utils.text import slugify
 from ..models import Job
+from api.utils.sequence_expansion import count_multi_sequence_rows
 
 
 @csrf_exempt
@@ -50,7 +51,11 @@ def detect_csv_format(request):
             status=400,
         )
 
-    valid_response = {"status": "valid", "num_rows": len(df)}
+    valid_response = {
+        "status": "valid",
+        "num_rows": len(df),
+        "multi_sequence_rows": count_multi_sequence_rows(df["Protein Sequence"].tolist()),
+    }
     if has_substrates:
         valid_response["csv_type"] = "full_reaction" if has_products else "substrate_list"
     else:
@@ -59,7 +64,8 @@ def detect_csv_format(request):
                 {
                     "status": "invalid",
                     "errors": [
-                        "Could not determine CSV format. Read instructions and check the example CSV files."
+                        "Could not determine CSV format. Read instructions and check "
+                        "the example CSV files."
                     ],
                 },
                 status=400,
@@ -84,7 +90,7 @@ def download_job_output(request, public_id):
     try:
         job = Job.objects.get(public_id=public_id)
     except Job.DoesNotExist:
-        raise Http404("Job not found.")
+        raise Http404("Job not found.") from None
 
     media_url = settings.MEDIA_ROOT + f"/{job.output_file.name}"
 
@@ -103,7 +109,7 @@ def download_job_input(request, public_id):
     try:
         job = Job.objects.get(public_id=public_id)
     except Job.DoesNotExist:
-        raise Http404("Job not found.")
+        raise Http404("Job not found.") from None
 
     media_url = f"{settings.MEDIA_ROOT}/jobs/{job.public_id}/input.csv"
     if not os.path.exists(media_url):

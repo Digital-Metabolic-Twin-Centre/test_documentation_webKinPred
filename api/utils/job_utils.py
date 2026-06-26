@@ -11,7 +11,8 @@ from django.utils import timezone
 from api.utils import get_experimental
 from api.services.embedding_progress_service import get_embedding_progress
 from api.services.job_progress_service import get_active_stage_embedding, get_progress_summary
-from api.utils.substrate_expansion import SubstrateExpansionPlan
+from api.utils.sequence_expansion import split_sequence_list
+from api.utils.substrate_expansion import split_substrate_list
 
 TARGET_ORDER = ["kcat", "Km", "kcat/Km"]
 VALID_TARGETS = set(TARGET_ORDER)
@@ -280,37 +281,76 @@ def get_experimental_results(
         if desc.input_behavior(target) != "expanded_pair":
             continue
 
-        sequences = dataframe["Protein Sequence"].tolist()
+        raw_sequences = dataframe["Protein Sequence"].tolist()
         if "Substrate" in dataframe.columns:
-            out[target] = get_experimental.lookup_experimental(
-                sequences,
-                dataframe["Substrate"].tolist(),
+            lookup_sequences: list[str] = []
+            lookup_substrates: list[Any] = []
+            positions: list[tuple[int, int, int]] = []
+            substrates = dataframe["Substrate"].tolist()
+            for reaction_idx, raw_sequence in enumerate(raw_sequences):
+                for sequence_idx, sequence in enumerate(split_sequence_list(raw_sequence)):
+                    lookup_sequences.append(sequence)
+                    lookup_substrates.append(substrates[reaction_idx])
+                    positions.append((reaction_idx, sequence_idx, 0))
+            results = get_experimental.lookup_experimental(
+                lookup_sequences,
+                lookup_substrates,
                 param_type=param_type,
             )
+            if len(results) != len(positions):
+                raise ValueError(
+                    f"Experimental lookup returned {len(results)} result(s) for "
+                    f"{len(positions)} protein/substrate pair(s)."
+                )
+            enriched: list[dict[str, Any]] = []
+            for result, (reaction_idx, sequence_idx, substrate_idx) in zip(
+                results,
+                positions,
+                strict=True,
+            ):
+                item = dict(result)
+                item["reaction_idx"] = reaction_idx
+                item["sequence_idx"] = sequence_idx
+                item["substrate_idx"] = substrate_idx
+                enriched.append(item)
+            out[target] = enriched
             continue
         if "Substrates" not in dataframe.columns:
             continue
 
-        plan = SubstrateExpansionPlan.build(
-            dataframe["Substrates"].tolist(),
-            range(len(dataframe)),
-        )
+        lookup_sequences: list[str] = []
+        lookup_substrates: list[str] = []
+        positions: list[tuple[int, int, int]] = []
+        substrate_values = dataframe["Substrates"].tolist()
+        for reaction_idx, raw_sequence in enumerate(raw_sequences):
+            sequences = split_sequence_list(raw_sequence)
+            substrates = split_substrate_list(substrate_values[reaction_idx])
+            for sequence_idx, sequence in enumerate(sequences):
+                for substrate_idx, substrate in enumerate(substrates):
+                    lookup_sequences.append(sequence)
+                    lookup_substrates.append(substrate)
+                    positions.append((reaction_idx, sequence_idx, substrate_idx))
         results = get_experimental.lookup_experimental(
-            plan.expanded_sequences(sequences),
-            plan.expanded_substrates(),
+            lookup_sequences,
+            lookup_substrates,
             param_type=param_type,
         )
-        if len(results) != len(plan.children):
+        if len(results) != len(positions):
             raise ValueError(
                 f"Experimental lookup returned {len(results)} result(s) for "
-                f"{len(plan.children)} substrate(s)."
+                f"{len(positions)} protein/substrate pair(s)."
             )
         enriched: list[dict[str, Any]] = []
-        for child_index, child in enumerate(plan.children):
-            result = dict(results[child_index])
-            result["reaction_idx"] = child.reaction_position
-            result["substrate_idx"] = child.substrate_position
-            enriched.append(result)
+        for result, (reaction_idx, sequence_idx, substrate_idx) in zip(
+            results,
+            positions,
+            strict=True,
+        ):
+            item = dict(result)
+            item["reaction_idx"] = reaction_idx
+            item["sequence_idx"] = sequence_idx
+            item["substrate_idx"] = substrate_idx
+            enriched.append(item)
         out[target] = enriched
 
     return out or None

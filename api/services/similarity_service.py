@@ -28,6 +28,7 @@ from api.utils.similarity_utils import (
     parse_mmseqs_results_raw,
     run_mmseqs_search,
 )
+from api.utils.sequence_expansion import split_sequence_list
 
 _log = logging.getLogger(__name__)
 
@@ -428,6 +429,7 @@ def append_kcat_similarity_columns_to_output_csv(
         str, tuple[float | None, float | None]
     ] | None = None,
     cache_only: bool = False,
+    selected_sequences_by_row: list[str] | None = None,
 ) -> None:
     """
     Best-effort enrichment for completed kcat jobs.
@@ -459,7 +461,7 @@ def append_kcat_similarity_columns_to_output_csv(
                 f"Similarity DB for '{dataset_label or kcat_method_key}' not found at {target_db}"
             )
 
-        raw_sequences = [str(seq).strip() for seq in df["Protein Sequence"].fillna("").tolist()]
+        raw_sequences = _row_similarity_sequences(df, selected_sequences_by_row)
         unique_sequences: list[str] = []
         seen: set[str] = set()
         for seq in raw_sequences:
@@ -553,3 +555,60 @@ def append_kcat_similarity_columns_to_output_csv(
         _write_blank_similarity_columns(output_csv_path, mean_col, max_col)
     finally:
         cleanup_temporary_files(*temp_files_to_cleanup)
+
+
+def _row_similarity_sequences(
+    df: pd.DataFrame,
+    selected_sequences_by_row: list[str] | None,
+) -> list[str]:
+    raw_values = df["Protein Sequence"].fillna("").tolist()
+    selected = selected_sequences_by_row or []
+    out: list[str] = []
+    for index, raw_value in enumerate(raw_values):
+        explicit = ""
+        if index < len(selected):
+            explicit = str(selected[index] or "").strip()
+        if explicit:
+            out.append(explicit)
+            continue
+
+        from_extra = _selected_sequence_from_extra_info(
+            df["Extra Info kcat"].iloc[index] if "Extra Info kcat" in df.columns else ""
+        )
+        if from_extra:
+            out.append(from_extra)
+            continue
+
+        tokens = split_sequence_list(raw_value)
+        out.append(tokens[0] if len(tokens) == 1 else "")
+    return out
+
+
+def _selected_sequence_from_extra_info(value: object) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    if not text:
+        return ""
+    try:
+        payload = json.loads(text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return ""
+    if not isinstance(payload, list):
+        return ""
+    for sequence_item in payload:
+        if not isinstance(sequence_item, dict):
+            continue
+        if sequence_item.get("selected"):
+            return str(sequence_item.get("sequence") or "").strip()
+        substrates = sequence_item.get("substrates")
+        if isinstance(substrates, list) and any(
+            isinstance(item, dict) and item.get("selected") for item in substrates
+        ):
+            return str(sequence_item.get("sequence") or "").strip()
+    return ""

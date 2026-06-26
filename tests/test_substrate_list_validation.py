@@ -13,6 +13,8 @@ try:
     from api.utils.job_utils import get_experimental_results, validate_required_columns_for_methods
     from api.utils.validation_utils import (
         validate_csv_structure,
+        validate_column_emptiness,
+        validate_protein_sequences,
         validate_products_column,
         validate_substrate_list_schema,
     )
@@ -22,7 +24,10 @@ except ModuleNotFoundError as exc:  # Minimal developer shells may lack server d
     _IMPORT_ERROR = exc
 
 
-@unittest.skipIf(_IMPORT_ERROR is not None, f"Server test dependencies unavailable: {_IMPORT_ERROR}")
+@unittest.skipIf(
+    _IMPORT_ERROR is not None,
+    f"Server test dependencies unavailable: {_IMPORT_ERROR}",
+)
 class SubstrateListValidationTests(unittest.TestCase):
     def test_structure_accepts_substrates_without_products(self):
         df = pd.DataFrame({"Protein Sequence": ["MKT"], "Substrates": ["CCO;O"]})
@@ -160,6 +165,18 @@ class SubstrateListValidationTests(unittest.TestCase):
                 {"kcat": "TurNup", "Km": "UniKP"},
             )
         )
+
+    def test_protein_sequence_lists_validate_each_position(self):
+        df = pd.DataFrame({"Protein Sequence": ["AAA;AZC;CCC"]})
+        invalid, lengths = validate_protein_sequences(df)
+        self.assertEqual(invalid[0]["row"], 1)
+        self.assertEqual(invalid[0]["position"], 2)
+        self.assertEqual(invalid[0]["invalid_chars"], ["Z"])
+        self.assertEqual(lengths["Server"], 0)
+
+    def test_semicolon_only_protein_cells_are_empty(self):
+        df = pd.DataFrame({"Protein Sequence": [";;", "AAA"], "Substrate": ["C", "O"]})
+        self.assertIn("Rows", validate_column_emptiness(df, "Protein Sequence"))
 
 
 if __name__ == "__main__":

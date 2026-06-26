@@ -18,7 +18,10 @@ except ModuleNotFoundError as exc:
     _IMPORT_ERROR = exc
 
 
-@unittest.skipIf(_IMPORT_ERROR is not None, f"Server test dependencies unavailable: {_IMPORT_ERROR}")
+@unittest.skipIf(
+    _IMPORT_ERROR is not None,
+    f"Server test dependencies unavailable: {_IMPORT_ERROR}",
+)
 class TargetInputDispatchTests(unittest.TestCase):
     def setUp(self):
         self.df = pd.DataFrame(
@@ -68,6 +71,58 @@ class TargetInputDispatchTests(unittest.TestCase):
         self.assertEqual(invoke.call_args.kwargs["substrates"], ["CCO", "O", "C"])
         self.assertNotIn("products", invoke.call_args.kwargs)
         self.assertEqual(result["preds"], ["[1.0,2.0]", "[3.0]"])
+
+    def test_sequence_list_and_substrate_list_expand_sequence_major(self):
+        df = pd.DataFrame(
+            {
+                "Protein Sequence": ["SEQ1;SEQ2"],
+                "Substrates": ["A;B"],
+                "Products": ["P"],
+            }
+        )
+        common = {
+            **self.common,
+            "df": df,
+            "sequences": ["SEQ1;SEQ2"],
+            "processed_by_reaction": [None],
+            "valid_reaction_indices": [],
+        }
+        with patch(
+            "api.tasks._invoke_method_prediction",
+            return_value=([1.0, 4.0, 3.0, 2.0], {}),
+        ) as invoke:
+            result = _execute_target_batch(target="Km", **common)
+
+        self.assertEqual(invoke.call_args.kwargs["sequences"], ["SEQ1", "SEQ1", "SEQ2", "SEQ2"])
+        self.assertEqual(invoke.call_args.kwargs["substrates"], ["A", "B", "A", "B"])
+        self.assertEqual(result["preds"], ["[1.0,2.0]"])
+        self.assertEqual(result["selected_sequences"], ["SEQ1"])
+
+    def test_catpred_native_kcat_repeats_combined_substrates_per_sequence(self):
+        df = pd.DataFrame(
+            {
+                "Protein Sequence": ["SEQ1;SEQ2"],
+                "Substrates": ["A;B"],
+                "Products": ["P"],
+            }
+        )
+        common = {
+            **self.common,
+            "df": df,
+            "sequences": ["SEQ1;SEQ2"],
+            "processed_by_reaction": [None],
+            "valid_reaction_indices": [],
+        }
+        with patch(
+            "api.tasks._invoke_method_prediction",
+            return_value=([2.0, 5.0], {}),
+        ) as invoke:
+            result = _execute_target_batch(target="kcat", **common)
+
+        self.assertEqual(invoke.call_args.kwargs["sequences"], ["SEQ1", "SEQ2"])
+        self.assertEqual(invoke.call_args.kwargs["substrates"], [["A", "B"], ["A", "B"]])
+        self.assertEqual(result["preds"], [5.0])
+        self.assertEqual(result["selected_sequences"], ["SEQ2"])
 
 
 if __name__ == "__main__":

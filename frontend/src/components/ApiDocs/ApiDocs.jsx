@@ -824,6 +824,8 @@ export default function ApiDocs() {
             semicolon-separated <code>Substrates</code> list. CatPred kcat consumes the complete
             substrate set natively. TurNup requires a full reaction with <code>Products</code>.
             Other methods accept full-reaction files but ignore and preserve the products.
+            <code>Protein Sequence</code> may contain semicolon-separated candidate sequences; output
+            remains one row per input row.
           </p>
           <div className="api-callout api-callout-info" style={{ marginBottom: '1rem' }}>
             <strong>Handling long protein sequences:</strong> Set <code>handleLongSequences</code> in
@@ -934,6 +936,12 @@ export default function ApiDocs() {
             Supplied products are still validated for every submission.
             Legacy CatPred kcat requests using dot-joined <code>Substrate</code> values remain
             accepted but are no longer the documented format.
+          </div>
+          <div className="api-callout api-callout-info" style={{ marginTop: '1rem' }}>
+            <strong>Protein sequence lists:</strong> Separate candidate protein sequences with
+            semicolons in <code>Protein Sequence</code>. The service predicts each candidate and
+            reduces per input row: max for kcat, min for Km, and max for direct kcat/Km. With
+            <code>Substrates</code>, Km and kcat/Km remain JSON arrays ordered by substrate.
           </div>
         </section>
 

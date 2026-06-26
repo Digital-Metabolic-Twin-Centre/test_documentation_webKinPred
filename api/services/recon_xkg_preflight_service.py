@@ -126,11 +126,16 @@ def preflight_recon_xkg_cache(
                     started,
                 )
 
-            raw_sequences = [
-                str(sequence).strip()
-                for sequence in dataframe["Protein Sequence"].fillna("").tolist()
-            ]
-            unique_sequences = list(dict.fromkeys(seq for seq in raw_sequences if seq))
+            unique_sequences = list(
+                dict.fromkeys(
+                    child.sequence
+                    for child in sequence_plan.expansion.children
+                    if (
+                        child.processed_sequence is not None
+                        and _valid_similarity_sequence(child.sequence)
+                    )
+                )
+            )
             similarity_count = len(unique_sequences)
             sequence_hashes = {
                 sequence: prediction_store.sha256_text(sequence)
@@ -234,3 +239,8 @@ def _valid_similarity_entry(value: Any) -> bool:
         item is None or (isinstance(item, Real) and math.isfinite(float(item)))
         for item in value
     )
+
+
+def _valid_similarity_sequence(sequence: str) -> bool:
+    allowed = set("ACDEFGHIKLMNPQRSTVWY")
+    return bool(sequence) and all(char in allowed for char in sequence)

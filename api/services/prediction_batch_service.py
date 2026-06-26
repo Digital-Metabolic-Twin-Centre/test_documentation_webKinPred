@@ -14,8 +14,12 @@ from typing import Any
 
 import pandas as pd
 from api.methods.base import PredictionError
-from api.utils.handle_long import get_valid_indices, truncate_sequences
 from api.utils.substrate_expansion import SubstrateExpansionPlan
+from api.utils.sequence_expansion import (
+    SequenceExpansionPlan,
+    TargetExpansionPlan,
+    TargetPredictionUnit,
+)
 
 try:
     from webKinPred.config_docker import SERVER_LIMIT
@@ -31,6 +35,7 @@ class SequenceBatchPlan:
     processed_by_reaction: tuple[Any | None, ...]
     valid_reaction_indices: tuple[int, ...]
     skipped_reactions: dict[int, str]
+    expansion: SequenceExpansionPlan
 
 
 @dataclass(frozen=True)
@@ -42,6 +47,7 @@ class TargetBatchPlan:
     sequences: tuple[Any, ...]
     call_kwargs: dict[str, Any]
     expansion: SubstrateExpansionPlan | None = None
+    unit_expansion: TargetExpansionPlan | None = None
 
 
 def build_sequence_batch_plan(
@@ -53,27 +59,21 @@ def build_sequence_batch_plan(
     limits = [min(SERVER_LIMIT, desc.max_seq_len) for desc in descriptors]
     limit = min(limits) if limits else SERVER_LIMIT
 
-    if handle_long_sequences == "truncate":
-        processed, valid_indices = truncate_sequences(sequences, limit)
-    else:
-        valid_indices = get_valid_indices(sequences, limit, mode="skip")
-        processed = [sequences[index] for index in valid_indices]
-
-    processed_by_reaction: list[Any | None] = [None] * len(sequences)
-    for local_index, reaction_index in enumerate(valid_indices):
-        processed_by_reaction[reaction_index] = processed[local_index]
-
-    valid_set = set(valid_indices)
-    skipped = {
-        index: "Sequence too long — row was excluded"
-        for index in range(len(sequences))
-        if index not in valid_set
-    }
+    expansion = SequenceExpansionPlan.build(
+        sequences,
+        range(len(sequences)),
+        limit=limit,
+        handle_long_sequences=handle_long_sequences,
+    )
+    processed_by_reaction = list(expansion.valid_processed_by_reaction())
+    valid_indices = list(expansion.valid_reaction_indices_for_legacy())
+    skipped = dict(expansion.skipped_reactions)
     return SequenceBatchPlan(
         original_sequences=tuple(sequences),
         processed_by_reaction=tuple(processed_by_reaction),
         valid_reaction_indices=tuple(valid_indices),
         skipped_reactions=skipped,
+        expansion=expansion,
     )
 
 
@@ -86,6 +86,15 @@ def build_target_batch_plan(
     """Build the exact positional engine batch for one selected target."""
     behavior = descriptor.input_behavior(target)
     valid_indices = sequence_plan.valid_reaction_indices
+
+    if sequence_plan.expansion.requires_reduction:
+        return _build_sequence_reduction_target_batch_plan(
+            descriptor,
+            target,
+            behavior,
+            dataframe,
+            sequence_plan,
+        )
 
     if (
         behavior == "expanded_pair"
@@ -126,6 +135,121 @@ def build_target_batch_plan(
         call_kwargs=kwargs,
         expansion=expansion,
     )
+
+
+def _build_sequence_reduction_target_batch_plan(
+    descriptor: Any,
+    target: str,
+    behavior: str,
+    dataframe: pd.DataFrame,
+    sequence_plan: SequenceBatchPlan,
+) -> TargetBatchPlan:
+    sequence_expansion = sequence_plan.expansion
+    units: list[TargetPredictionUnit] = []
+    slices: list[tuple[int, int, int]] = []
+    substrate_tokens_by_reaction: list[tuple[str, ...]] = [tuple()] * len(dataframe)
+
+    from api.utils.substrate_expansion import split_substrate_list
+
+    uses_substrate_slots = (
+        behavior == "expanded_pair"
+        and "Substrate" in descriptor.col_to_kwarg
+        and "Substrates" in dataframe.columns
+    )
+
+    for reaction_position, seq_start, seq_end in sequence_expansion.reaction_slices:
+        start = len(units)
+        substrate_tokens = (
+            tuple(split_substrate_list(dataframe["Substrates"].iloc[reaction_position]))
+            if "Substrates" in dataframe.columns
+            else tuple()
+        )
+        substrate_tokens_by_reaction[reaction_position] = substrate_tokens
+        for sequence_child_index in range(seq_start, seq_end):
+            sequence_child = sequence_expansion.children[sequence_child_index]
+            if sequence_child.processed_sequence is None:
+                continue
+            if uses_substrate_slots:
+                for substrate_position, substrate in enumerate(substrate_tokens):
+                    units.append(
+                        TargetPredictionUnit(
+                            reaction_position=reaction_position,
+                            sequence_child_index=sequence_child_index,
+                            sequence_position=sequence_child.sequence_position,
+                            sequence=sequence_child.sequence,
+                            substrate_position=substrate_position,
+                            substrate=substrate,
+                        )
+                    )
+            else:
+                units.append(
+                    TargetPredictionUnit(
+                        reaction_position=reaction_position,
+                        sequence_child_index=sequence_child_index,
+                        sequence_position=sequence_child.sequence_position,
+                        sequence=sequence_child.sequence,
+                    )
+                )
+        slices.append((reaction_position, start, len(units)))
+
+    unit_plan = TargetExpansionPlan(
+        sequence_plan=sequence_expansion,
+        units=tuple(units),
+        reaction_slices=tuple(slices),
+        substrate_tokens_by_reaction=tuple(substrate_tokens_by_reaction),
+        uses_substrate_slots=uses_substrate_slots,
+    )
+    kwargs = _sequence_reduction_call_kwargs(
+        descriptor,
+        dataframe,
+        behavior,
+        unit_plan,
+    )
+    kwargs.update(descriptor.target_kwargs.get(target, {}))
+    return TargetBatchPlan(
+        target=target,
+        input_behavior=behavior,
+        sequences=tuple(
+            sequence_expansion.children[unit.sequence_child_index].processed_sequence
+            for unit in unit_plan.units
+        ),
+        call_kwargs=kwargs,
+        unit_expansion=unit_plan,
+    )
+
+
+def _sequence_reduction_call_kwargs(
+    descriptor: Any,
+    dataframe: pd.DataFrame,
+    behavior: str,
+    unit_plan: TargetExpansionPlan,
+) -> dict[str, list[Any]]:
+    kwargs: dict[str, list[Any]] = {}
+    for column, kwarg_name in descriptor.col_to_kwarg.items():
+        if column == "Substrate" and unit_plan.uses_substrate_slots:
+            kwargs[kwarg_name] = [unit.substrate for unit in unit_plan.units]
+            continue
+        if (
+            column == "Substrate"
+            and behavior == "native_multi"
+            and "Substrates" in dataframe.columns
+        ):
+            kwargs[kwarg_name] = [
+                list(unit_plan.substrate_tokens_by_reaction[unit.reaction_position])
+                for unit in unit_plan.units
+            ]
+            continue
+        source_column = (
+            "Substrates"
+            if column == "Substrate" and "Substrates" in dataframe.columns
+            else column
+        )
+        _require_column(descriptor, dataframe, source_column)
+        kwargs[kwarg_name] = [
+            dataframe[source_column].iloc[unit.reaction_position]
+            for unit in unit_plan.units
+        ]
+    return kwargs
 
 
 def _expanded_call_kwargs(

@@ -6,6 +6,7 @@ These functions handle specific validation tasks following single responsibility
 import pandas as pd
 from typing import List, Dict, Any, Optional, Tuple
 from api.utils.convert_to_mol import convert_to_mol
+from api.utils.sequence_expansion import split_sequence_list
 from api.utils.substrate_expansion import split_substrate_list
 
 try:
@@ -306,35 +307,36 @@ def validate_protein_sequences(
     total_length_violations = {model: 0 for model in model_limits}
     total_length_violations["Server"] = 0
 
-    for i, sequence in enumerate(dataframe["Protein Sequence"]):
+    for i, raw_sequence in enumerate(dataframe["Protein Sequence"]):
         row_num = i + 1
 
-        # Check for empty sequences
-        if not isinstance(sequence, str) or len(sequence.strip()) == 0:
+        sequences = split_sequence_list(raw_sequence)
+        if not sequences:
             invalid_proteins.append(
-                {"row": row_num, "value": sequence or "", "reason": "Empty sequence"}
+                {"row": row_num, "value": raw_sequence or "", "reason": "Empty sequence"}
             )
             continue
 
-        cleaned_sequence = sequence.strip()
-        sequence_length = len(cleaned_sequence)
+        for sequence_position, cleaned_sequence in enumerate(sequences, start=1):
+            sequence_length = len(cleaned_sequence)
 
-        # Aggregate length violations
-        length_violations = calculate_sequence_length_violations(sequence_length)
-        for model, violation_count in length_violations.items():
-            total_length_violations[model] += violation_count
+            # Aggregate length violations per sequence token.
+            length_violations = calculate_sequence_length_violations(sequence_length)
+            for model, violation_count in length_violations.items():
+                total_length_violations[model] += violation_count
 
-        # Check for invalid characters
-        invalid_chars = validate_protein_sequence_characters(cleaned_sequence)
-        if invalid_chars:
-            invalid_proteins.append(
-                {
-                    "row": row_num,
-                    "value": cleaned_sequence,
-                    "invalid_chars": invalid_chars,
-                    "reason": "Invalid characters in sequence",
-                }
-            )
+            # Check for invalid characters
+            invalid_chars = validate_protein_sequence_characters(cleaned_sequence)
+            if invalid_chars:
+                invalid_proteins.append(
+                    {
+                        "row": row_num,
+                        "position": sequence_position,
+                        "value": cleaned_sequence,
+                        "invalid_chars": invalid_chars,
+                        "reason": "Invalid characters in sequence",
+                    }
+                )
 
     return invalid_proteins, total_length_violations
 
@@ -441,9 +443,12 @@ def validate_column_emptiness(
         return None
 
     # Check for empty values (NaN, None, empty strings, whitespace-only strings)
-    empty_mask = dataframe[column_name].isna() | (
-        dataframe[column_name].astype(str).str.strip() == ""
-    )
+    if column_name == "Protein Sequence":
+        empty_mask = dataframe[column_name].apply(lambda value: not split_sequence_list(value))
+    else:
+        empty_mask = dataframe[column_name].isna() | (
+            dataframe[column_name].astype(str).str.strip() == ""
+        )
     empty_rows = (
         dataframe[empty_mask].index + 2
     )  # +2 because: +1 for header, +1 for 0-indexed to 1-indexed

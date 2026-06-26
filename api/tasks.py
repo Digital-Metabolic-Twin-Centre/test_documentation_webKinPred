@@ -59,6 +59,11 @@ from api.utils.substrate_expansion import (
     SubstrateExpansionPlan,
     reduce_substrate_predictions,
 )
+from api.utils.sequence_expansion import (
+    SequenceExpansionPlan,
+    TargetExpansionPlan,
+    reduce_sequence_predictions,
+)
 from celery import shared_task
 
 _log = logging.getLogger(__name__)
@@ -468,7 +473,9 @@ def _execute_multi_prediction(
     # are coordinated as one family: embeddings are kept until the last target
     # across both methods has run.
     omniesi_family_keys = {"OmniESI", "OmniESI-O2DENet"}
-    omniesi_targets = [target for target in targets if desc_by_target[target].key in omniesi_family_keys]
+    omniesi_targets = [
+        target for target in targets if desc_by_target[target].key in omniesi_family_keys
+    ]
     last_omniesi_target = omniesi_targets[-1] if omniesi_targets else None
 
     for target in targets:
@@ -489,6 +496,7 @@ def _execute_multi_prediction(
                 sequences=sequences,
                 processed_by_reaction=processed_by_reaction,
                 valid_reaction_indices=valid_idx,
+                sequence_expansion=sequence_plan.expansion,
                 experimental_results=experimental_results.get(target, []),
                 canonicalize_substrates=canonicalize_substrates,
                 disable_gpu_precompute=disable_gpu_precompute,
@@ -531,12 +539,14 @@ def _execute_multi_prediction(
     out_path = _output_path(job.public_id)
     results_df.to_csv(out_path, index=False)
     if include_similarity_columns and "kcat" in targets:
+        selected_sequences = target_results.get("kcat", {}).get("selected_sequences")
         append_kcat_similarity_columns_to_output_csv(
             out_path,
             desc_by_target["kcat"].key,
             recon_xkg=recon_xkg,
             cached_similarity_snapshot=similarity_cache_snapshot,
             cache_only=cache_only,
+            selected_sequences_by_row=selected_sequences,
         )
 
     if cache_stats is not None:
@@ -577,6 +587,7 @@ def _execute_target_batch(
     processed_by_reaction: list[Any],
     valid_reaction_indices: list[int],
     experimental_results: list[dict[str, Any]],
+    sequence_expansion: SequenceExpansionPlan | None = None,
     canonicalize_substrates: bool,
     disable_gpu_precompute: bool,
     extra_call_kwargs: dict[str, Any],
@@ -587,14 +598,102 @@ def _execute_target_batch(
 ) -> dict[str, Any]:
     """Execute one method/target either natively or as an expanded child batch."""
     n_rows = len(sequences)
+    if sequence_expansion is None:
+        sequence_expansion = SequenceExpansionPlan.build(
+            sequences,
+            range(len(sequences)),
+            limit=max((len(str(sequence)) for sequence in sequences), default=0),
+            handle_long_sequences="truncate",
+        )
     sequence_plan = SequenceBatchPlan(
         original_sequences=tuple(sequences),
         processed_by_reaction=tuple(processed_by_reaction),
         valid_reaction_indices=tuple(valid_reaction_indices),
         skipped_reactions={},
+        expansion=sequence_expansion,
     )
     batch = build_target_batch_plan(desc, target, df, sequence_plan)
     input_behavior = batch.input_behavior
+    if batch.unit_expansion is not None:
+        unit_plan = batch.unit_expansion
+        unit_sequences = list(batch.sequences)
+        call_kwargs = dict(batch.call_kwargs)
+        call_kwargs.update(extra_call_kwargs)
+
+        if unit_sequences:
+            child_predictions, child_errors = _invoke_method_prediction(
+                desc=desc,
+                sequences=unit_sequences,
+                public_id=job.public_id,
+                target=target,
+                canonicalize_substrates=canonicalize_substrates,
+                disable_gpu_precompute=disable_gpu_precompute,
+                recon_xkg=recon_xkg,
+                cache_stats=cache_stats,
+                cache_snapshot=prediction_cache_snapshot,
+                cache_only=cache_only,
+                **call_kwargs,
+            )
+        else:
+            child_predictions, child_errors = [], {}
+            set_stage_prediction_snapshot(
+                job_public_id=job.public_id,
+                target=target,
+                method_key=desc.key,
+                molecules_total=n_rows,
+                molecules_processed=0,
+                invalid_rows=0,
+                predictions_total=0,
+                predictions_made=0,
+            )
+
+        formatted_values: list[Any] = []
+        formatted_sources: list[str] = []
+        child_details: list[str] = [""] * len(unit_plan.units)
+        for child_index in range(len(unit_plan.units)):
+            value, source = _format_prediction_value_and_source(
+                desc,
+                target,
+                child_predictions[child_index],
+            )
+            formatted_values.append(value)
+            formatted_sources.append(source if value is not None else "")
+
+        if input_behavior == "expanded_pair":
+            _apply_unit_experimental_overrides(
+                job=job,
+                desc=desc,
+                target=target,
+                plan=unit_plan,
+                experimental_results=experimental_results,
+                values=formatted_values,
+                sources=formatted_sources,
+                details=child_details,
+                child_errors=child_errors,
+            )
+
+        try:
+            reduced = reduce_sequence_predictions(
+                plan=unit_plan,
+                target=target,
+                child_predictions=formatted_values,
+                child_sources=formatted_sources,
+                child_errors=child_errors,
+                child_details=child_details,
+                reaction_count=n_rows,
+            )
+        except ValueError as exc:
+            raise PredictionError(f"{desc.display_name} result mapping failed: {exc}") from exc
+
+        return {
+            "preds": reduced.predictions,
+            "sources": reduced.sources,
+            "extra": reduced.extra_info,
+            "failed_reactions": reduced.failed_reactions,
+            "selected_sequences": reduced.selected_sequences,
+            "output_col": desc.output_cols[target],
+        }
+
     if input_behavior == "expanded_pair" and batch.expansion is not None:
         plan = batch.expansion
         child_sequences = list(batch.sequences)
@@ -669,6 +768,7 @@ def _execute_target_batch(
             "sources": reduced.sources,
             "extra": reduced.extra_info,
             "failed_reactions": reduced.failed_reactions,
+            "selected_sequences": [""] * n_rows,
             "output_col": desc.output_cols[target],
         }
 
@@ -795,6 +895,7 @@ def _execute_native_target_batch(
         "sources": sources,
         "extra": extra,
         "failed_reactions": failed_reactions,
+        "selected_sequences": [""] * n_rows,
         "output_col": desc.output_cols[target],
     }
 
@@ -832,6 +933,51 @@ def _apply_expanded_experimental_overrides(
         sources[child_index] = _source(exp)
         details[child_index] = build_extra_info(exp, target, previous, desc.display_name)
         child_errors.pop(child_index, None)
+
+
+def _apply_unit_experimental_overrides(
+    *,
+    job: Job,
+    desc,
+    target: str,
+    plan: TargetExpansionPlan,
+    experimental_results: list[dict[str, Any]],
+    values: list[Any],
+    sources: list[str],
+    details: list[str],
+    child_errors: dict[int, str],
+) -> None:
+    if target not in {"kcat", "Km"}:
+        return
+    exp_key = "kcat_value" if target == "kcat" else "km_value"
+    by_position = {
+        (
+            item.get("reaction_idx"),
+            item.get("sequence_idx"),
+            item.get("substrate_idx"),
+        ): item
+        for item in experimental_results
+        if item.get("found")
+    }
+    for unit_index, unit in enumerate(plan.units):
+        substrate_idx = unit.substrate_position if unit.substrate_position is not None else 0
+        exp = by_position.get(
+            (
+                unit.reaction_position,
+                unit.sequence_position,
+                substrate_idx,
+            )
+        )
+        if not exp or exp_key not in exp:
+            continue
+        if not _experimental_sequence_matches(exp, unit.sequence):
+            _log_experimental_mismatch(job, desc, target, unit.reaction_position)
+            continue
+        previous = values[unit_index]
+        values[unit_index] = exp[exp_key]
+        sources[unit_index] = _source(exp)
+        details[unit_index] = build_extra_info(exp, target, previous, desc.display_name)
+        child_errors.pop(unit_index, None)
 
 
 def _apply_native_experimental_overrides(

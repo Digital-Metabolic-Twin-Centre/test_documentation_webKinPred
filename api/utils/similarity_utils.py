@@ -6,8 +6,9 @@ These functions handle specific tasks following single responsibility principle.
 import tempfile
 import os
 import shutil
-from typing import List, Dict, Tuple, Any
+from typing import List, Dict, Tuple
 import pandas as pd
+from api.utils.sequence_expansion import split_sequence_list
 from api.utils.run_and_stream import run_and_stream
 from api.utils.similarity_config import CONDA_PATH
 
@@ -49,7 +50,9 @@ def extract_protein_sequences_from_csv(csv_file) -> List[str]:
     if "Protein Sequence" not in dataframe.columns:
         raise ValueError('CSV must contain a "Protein Sequence" column')
 
-    sequences = dataframe["Protein Sequence"].dropna().tolist()
+    sequences: list[str] = []
+    for value in dataframe["Protein Sequence"].dropna().tolist():
+        sequences.extend(split_sequence_list(value))
 
     if not sequences:
         raise ValueError("No valid protein sequences found in CSV")
