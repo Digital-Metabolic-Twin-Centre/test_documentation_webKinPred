@@ -11,18 +11,18 @@ class MethodInputBehaviorTests(unittest.TestCase):
         self.assertEqual(catpred.input_behavior("Km"), "expanded_pair")
         self.assertEqual(
             catpred.accepted_csv_types_for_target("kcat"),
-            ["multi", "substrate_list", "full_reaction"],
+            ["multi", "full_reaction"],
         )
         self.assertEqual(
             catpred.accepted_csv_types_for_target("Km"),
-            ["single", "substrate_list", "full_reaction"],
+            ["single", "multi", "full_reaction"],
         )
 
     def test_defaults_cover_pair_and_full_reaction_methods(self):
         self.assertEqual(dlkcat.input_behavior("kcat"), "expanded_pair")
         self.assertEqual(
             dlkcat.accepted_csv_types_for_target("kcat"),
-            ["single", "substrate_list", "full_reaction"],
+            ["single", "multi", "full_reaction"],
         )
         self.assertEqual(turnup.input_behavior("kcat"), "native_full_reaction")
         self.assertEqual(turnup.accepted_csv_types_for_target("kcat"), ["full_reaction"])

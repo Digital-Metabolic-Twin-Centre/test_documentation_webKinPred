@@ -39,6 +39,78 @@
   color: #6d3d00;
 }
 
+/* ── Behaviour note — subtle, informational (not an alarm) ── */
+.howto-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.65rem 0.8rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-left: 2px solid rgba(195, 178, 255, 0.4);
+  border-radius: 0 6px 6px 0;
+}
+
+.howto-note-tag {
+  flex-shrink: 0;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(195, 178, 255, 0.75);
+  padding-top: 0.12rem;
+}
+
+.howto-note-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.howto-note-line {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.howto-note-line strong {
+  color: rgba(255, 255, 255, 0.85);
+  font-weight: 600;
+}
+
+.howto-note-line code {
+  font-size: 0.72rem;
+  color: rgba(255, 255, 255, 0.78);
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0.05rem 0.28rem;
+  border-radius: 3px;
+}
+
+[data-theme="light"] .howto-note {
+  background: rgba(80, 64, 168, 0.04);
+  border-color: rgba(80, 64, 168, 0.14);
+  border-left-color: rgba(80, 64, 168, 0.45);
+}
+
+[data-theme="light"] .howto-note-tag {
+  color: rgba(80, 64, 168, 0.8);
+}
+
+[data-theme="light"] .howto-note-line {
+  color: rgba(40, 30, 70, 0.72);
+}
+
+[data-theme="light"] .howto-note-line strong {
+  color: rgba(30, 22, 55, 0.92);
+}
+
+[data-theme="light"] .howto-note-line code {
+  color: rgba(40, 30, 70, 0.85);
+  background: rgba(80, 64, 168, 0.1);
+}
+
 .step-col {
   padding: 1rem;
 }

@@ -98,7 +98,7 @@ export default function useJobSubmission() {
         return methodMeta.acceptedCsvTypes.includes(csvType);
       }
       if (csvType === 'full_reaction') return true;
-      if (csvType === 'substrate_list') return methodMeta.inputFormat === 'single';
+      if (csvType === 'multi') return methodMeta.inputFormat === 'single';
       return methodMeta.inputFormat === 'single';
     };
 

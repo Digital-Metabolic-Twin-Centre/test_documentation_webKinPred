@@ -23,21 +23,19 @@ InputFormat = Literal["single", "multi", "full reaction"]
 The user-facing CSV input format.
 
 - "single": requires a single "Substrate" column (one SMILES/InChI per row).
-- "multi": requires a single "Substrate" column with co-substrates dot-joined
-           in the same cell (for example, "A.B").
+- "multi": requires a "Substrates" column with semicolon-separated values
+           (for example, "A;B").
 - "full reaction": requires "Substrates" and "Products" columns
                    (semicolon-separated SMILES/InChI per row).
 
-Independently of these legacy labels, the internal ``substrate_list`` CSV type
-(shown to users as Multi-Substrate) supplies ``Substrates`` without
-``Products``. The orchestration layer
-expands that schema for every descriptor using the backend ``"single"``
-contract.
+The Multi-Substrate schema supplies ``Substrates`` without ``Products``. The
+orchestration layer expands that schema for pair-based targets and passes it
+through as one ordered collection for native multi-substrate targets.
 
 Backend descriptors use ``DescriptorInputFormat`` below. In descriptors and
-validation logic, both user-facing "single" and "multi" use the "single"
-column contract. User-facing "full reaction" is represented by the backend
-"multi" contract with both "Substrates" and "Products" columns.
+validation logic, user-facing "single" uses the "single" column contract.
+User-facing "full reaction" is represented by the backend "multi" contract
+with both "Substrates" and "Products" columns.
 """
 
 DescriptorInputFormat = Literal["single", "multi"]
@@ -188,9 +186,9 @@ class MethodDescriptor:
         Backend CSV column contract expected by the method: ``"single"``
         reads the ``Substrate`` column, while ``"multi"`` reads the
         ``Substrates`` and ``Products`` columns. In user-facing text, the
-        visible CSV formats are ``"single"``, ``"multi"`` (dot-joined
-        co-substrates in ``Substrate``), and ``"full reaction"`` (the
-        ``Substrates``/``Products`` backend ``"multi"`` contract).
+        visible CSV formats are ``"single"``, ``"multi"``, and
+        ``"full reaction"`` (the ``Substrates``/``Products`` backend
+        ``"multi"`` contract).
 
     input_behavior_by_target : dict[PredictionTarget, InputBehavior]
         Optional target-level override for user-facing ``Substrates`` input.
@@ -345,6 +343,5 @@ class MethodDescriptor:
         if behavior == "native_full_reaction":
             return ["full_reaction"]
         if behavior == "native_multi":
-            # ``multi`` is the compatibility-only, dot-joined CatPred schema.
-            return ["multi", "substrate_list", "full_reaction"]
-        return ["single", "substrate_list", "full_reaction"]
+            return ["multi", "full_reaction"]
+        return ["single", "multi", "full_reaction"]

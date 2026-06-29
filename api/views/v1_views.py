@@ -166,7 +166,7 @@ def api_list_methods(request):
             target: desc.accepted_csv_types_for_target(target)
             for target in desc.supports
         }
-        csv_type_order = ["single", "multi", "substrate_list", "full_reaction"]
+        csv_type_order = ["single", "multi", "full_reaction"]
         accepted_csv_types = [
             csv_type
             for csv_type in csv_type_order

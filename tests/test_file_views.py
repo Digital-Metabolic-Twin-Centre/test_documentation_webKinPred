@@ -41,6 +41,38 @@ class DetectCsvFormatTests(unittest.TestCase):
         self.assertEqual(payload["csv_type"], "single")
         self.assertEqual(payload["multi_sequence_rows"], 1)
 
+    def test_dot_in_substrate_does_not_create_multi_substrate_schema(self):
+        csv = (
+            "Protein Sequence,Substrate\n"
+            "AAA,CCO.O\n"
+        ).encode()
+        request = RequestFactory().post(
+            "/detect-csv-format/",
+            {"file": SimpleUploadedFile("input.csv", csv, content_type="text/csv")},
+        )
+
+        response = detect_csv_format(request)
+        payload = json.loads(response.content.decode())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["csv_type"], "single")
+
+    def test_substrates_column_reports_multi_substrate_schema(self):
+        csv = (
+            "Protein Sequence,Substrates\n"
+            "AAA,CCO;O\n"
+        ).encode()
+        request = RequestFactory().post(
+            "/detect-csv-format/",
+            {"file": SimpleUploadedFile("input.csv", csv, content_type="text/csv")},
+        )
+
+        response = detect_csv_format(request)
+        payload = json.loads(response.content.decode())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["csv_type"], "multi")
+
 
 if __name__ == "__main__":
     unittest.main()

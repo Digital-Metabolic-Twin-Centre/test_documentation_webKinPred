@@ -460,9 +460,9 @@ export default function ApiDocs() {
         "supports": ["kcat"],
         "inputFormat": "single",
         "requiredColumns": ["Protein Sequence", "Substrate"],
-        "acceptedCsvTypes": ["single", "substrate_list", "full_reaction"],
+        "acceptedCsvTypes": ["single", "multi", "full_reaction"],
         "acceptedCsvTypesByTarget": {
-          "kcat": ["single", "substrate_list", "full_reaction"]
+          "kcat": ["single", "multi", "full_reaction"]
         },
         "inputBehaviorByTarget": {"kcat": "expanded_pair"},
         "maxSeqLen": null
@@ -471,8 +471,8 @@ export default function ApiDocs() {
         "id": "CatPred",
         "supports": ["kcat", "Km"],
         "acceptedCsvTypesByTarget": {
-          "kcat": ["multi", "substrate_list", "full_reaction"],
-          "Km": ["single", "substrate_list", "full_reaction"]
+          "kcat": ["multi", "full_reaction"],
+          "Km": ["single", "multi", "full_reaction"]
         },
         "inputBehaviorByTarget": {
           "kcat": "native_multi",
@@ -934,8 +934,6 @@ export default function ApiDocs() {
             are <code>null</code>. CatPred kcat instead makes one native prediction for the
             complete substrate set. TurNup uses <code>Products</code>; other methods ignore them.
             Supplied products are still validated for every submission.
-            Legacy CatPred kcat requests using dot-joined <code>Substrate</code> values remain
-            accepted but are no longer the documented format.
           </div>
           <div className="api-callout api-callout-info" style={{ marginTop: '1rem' }}>
             <strong>Protein sequence lists:</strong> Separate candidate protein sequences with

@@ -125,15 +125,6 @@ SINGLE_SUBSTRATE_CSV = textwrap.dedent("""\
     MCTAITLNGNSNYFGRNLDLDFSYGEEVIITPAEYEFKFRKEKAIKNHKSLIGVGIVANDYPLYFDAINEDGLGMAGLNFPGNAYYSDALENDKDNITPFEFIPWILGQCSDVNEARNLVEKINLINLSFSEQLPLAGLHWLIADREKSIVVEVTKSGVHIYDNPIGILTNNPEFNYQMYNLNKYRNLSISTPQNTFSDSVDLKVDGTGFGGIGLPGDVSPESRFVRATFSKLNSSKGMTVEEDITQFFHILGTVEQIKGVNKTESGKEEYTVYSNCYDLDNKTLYYTTYENRQIVAVTLNKDKDGNRLVTYPFERKQIINKLN,OCC(O)CO
 """)
 
-# CatPred compatibility fixture: the historical single "Substrate" column
-# with dot-joined co-substrates remains accepted for CatPred kcat.
-CATPRED_DOTJOIN_SUBSTRATE_CSV = textwrap.dedent("""\
-    Protein Sequence,Substrate
-    MAAAALRLSEAGHTVACHDESFKQKDELEAFAETYPQLKPMSEQEPAELIEAVTSAYGQVDVLVSNDIFAPEFQPIDKYAVEDYRGAVEALQIRPFALVNAVASQMKKRKSGHIIFITSATPFGPWKELSTYTSARAGACTLANALSKELGEYNIPVFAIGPNYLHSEDSPYFYPTEPWKTNPEHVAHVKKVTALQRLGTQKELGELVAFLASGSCDYLTGQVFWLAGGFPMIERWPGMPE,CC(=O)O.O
-    MEMLEEHRCFEGWQQRWRHDSSTLNCPMTFSIFLPPPRDHTPPPVLYWLSGLTCNDENFTTKAGAQRVAAELGIVLVMPDTSPRGEKVANDDGYDLGQGAGFYLNATQPPWATHYRMYDYLRDELPALVQSQFNVSDRCAISGHSMGGHGALIMALKNPGKYTSVSAFAPIVNPCSVPWGIKAFSSYLGEDKNAWLEWDSCALMYASNAQDAIPTLIAQGDNDQFLADQLQPAVLAEAARQKAWPMTLRIQPGYDHSYYFIASFIEDHLRFHAQYLLK,C1CCCCC1.O
-    MCTAITLNGNSNYFGRNLDLDFSYGEEVIITPAEYEFKFRKEKAIKNHKSLIGVGIVANDYPLYFDAINEDGLGMAGLNFPGNAYYSDALENDKDNITPFEFIPWILGQCSDVNEARNLVEKINLINLSFSEQLPLAGLHWLIADREKSIVVEVTKSGVHIYDNPIGILTNNPEFNYQMYNLNKYRNLSISTPQNTFSDSVDLKVDGTGFGGIGLPGDVSPESRFVRATFSKLNSSKGMTVEEDITQFFHILGTVEQIKGVNKTESGKEEYTVYSNCYDLDNKTLYYTTYENRQIVAVTLNKDKDGNRLVTYPFERKQIINKLN,OCC(O)CO.CCO
-""")
-
 # Full-reaction CSV (TurNup uses it natively; pair methods expand Substrates)
 FULL_REACTION_CSV = textwrap.dedent("""\
     Protein Sequence,Substrates,Products
@@ -271,14 +262,14 @@ def choose_submit_csv(
     Choose the CSV fixture that matches method-specific input expectations.
 
     - TurNup (kcat) uses full-reaction CSV.
-    - CatPred kcat compatibility tests use dot-joined values in "Substrate".
+    - CatPred kcat uses semicolon-separated values in "Substrates".
     - Other methods use the standard single-substrate fixture.
     """
     if prediction_type == "kcat":
         if kcat_method == "TurNup":
             return FULL_REACTION_CSV
         if kcat_method == "CatPred":
-            return CATPRED_DOTJOIN_SUBSTRATE_CSV
+            return SUBSTRATE_LIST_CSV
     return SINGLE_SUBSTRATE_CSV
 
 
@@ -394,9 +385,9 @@ def test_methods(base: str, methods: set) -> None:
         method for method in all_method_entries if method.get("inputFormat") == "single"
     ]
     check(
-        "pair methods accept substrate_list",
+        "pair methods accept multi-substrate",
         bool(pair_entries)
-        and all("substrate_list" in method.get("acceptedCsvTypes", []) for method in pair_entries),
+        and all("multi" in method.get("acceptedCsvTypes", []) for method in pair_entries),
     )
     check(
         "methods publish target-specific input metadata",
@@ -432,9 +423,9 @@ def test_methods(base: str, methods: set) -> None:
             catpred_km.get("inputBehaviorByTarget", {}).get("Km") == "expanded_pair",
         )
         check(
-            "legacy dot CSV is CatPred-kcat-only",
-            "multi" in catpred_kcat.get("acceptedCsvTypesByTarget", {}).get("kcat", [])
-            and "multi" not in catpred_km.get("acceptedCsvTypesByTarget", {}).get("Km", []),
+            "CatPred kcat accepts only semicolon multi-substrate schemas",
+            catpred_kcat.get("acceptedCsvTypesByTarget", {}).get("kcat")
+            == ["multi", "full_reaction"],
         )
     turnup_entries = [method for method in all_method_entries if method.get("id") == "TurNup"]
     if turnup_entries:
@@ -772,15 +763,10 @@ def test_submit_errors(base: str, headers: dict) -> None:
     r = submit(base, headers, SINGLE_SUBSTRATE_CSV, "kcat", kcat_method="TurNup")
     check("TurNup+wrong CSV → 400", r.status_code == 400, f"got {r.status_code}")
 
-    # CatPred kcat now uses the semicolon Substrates schema; scalar Substrate
-    # is not advertised, while legacy dot-joined Substrate remains supported.
+    # CatPred kcat uses the semicolon Substrates schema; scalar Substrate
+    # is not accepted.
     r = submit(base, headers, SINGLE_SUBSTRATE_CSV, "kcat", kcat_method="CatPred")
     check("CatPred kcat+scalar Substrate → 400", r.status_code == 400, f"got {r.status_code}")
-
-    # Dot-joined input is compatibility-only for CatPred kcat. Expanded pair
-    # methods must use semicolon-separated Substrates to get max/array behavior.
-    r = submit(base, headers, CATPRED_DOTJOIN_SUBSTRATE_CSV, "kcat", kcat_method="DLKcat")
-    check("pair method+legacy dot CSV → 400", r.status_code == 400, f"got {r.status_code}")
 
     invalid_product_csv = (
         "Protein Sequence,Substrates,Products\n"
@@ -1366,8 +1352,6 @@ def _multi_substrate_test_csv(kind: str) -> str:
             "Protein Sequence,Substrates,Products\n"
             f"{sequence},CCO;C1CCCCC1,CC=O;O\n"
         )
-    if kind == "legacy_catpred":
-        return "Protein Sequence,Substrate\n" f"{sequence},CCO.C1CCCCC1\n"
     raise ValueError(f"Unknown comparison CSV kind: {kind}")
 
 
@@ -1585,15 +1569,6 @@ def _test_catpred_native_multi(
         methods={"Km": "CatPred"},
         poll_timeout=poll_timeout,
     )
-    legacy = _submit_wait_json_result(
-        base,
-        headers,
-        label=f"{label}/legacy-dot",
-        csv_content=_multi_substrate_test_csv("legacy_catpred"),
-        targets=["kcat"],
-        methods={"kcat": "CatPred"},
-        poll_timeout=poll_timeout,
-    )
     combined_methods = {"kcat": "CatPred", "Km": "CatPred"}
     multi = _submit_wait_json_result(
         base,
@@ -1613,22 +1588,16 @@ def _test_catpred_native_multi(
         methods=combined_methods,
         poll_timeout=poll_timeout,
     )
-    if not all((km_control, legacy, multi, full)):
+    if not all((km_control, multi, full)):
         return
 
     _assert_preserved_reaction_input(f"{label}/semicolon", multi, full=False)
     _assert_preserved_reaction_input(f"{label}/full", full, full=True)
 
-    legacy_column = _prediction_column(legacy, "kcat")
     multi_column = _prediction_column(multi, "kcat")
     full_column = _prediction_column(full, "kcat")
-    legacy_value = legacy["data"][0].get(legacy_column) if legacy_column else None
     multi_value = multi["data"][0].get(multi_column) if multi_column else None
     full_value = full["data"][0].get(full_column) if full_column else None
-    check(
-        f"[{label}] semicolon kcat equals legacy dot kcat",
-        _numbers_match(multi_value, legacy_value),
-    )
     check(f"[{label}] full kcat equals semicolon kcat", _numbers_match(full_value, multi_value))
     check(
         f"[{label}] native kcat has no child-reduction Extra Info",

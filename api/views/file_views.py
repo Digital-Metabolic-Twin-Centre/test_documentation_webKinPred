@@ -57,7 +57,7 @@ def detect_csv_format(request):
         "multi_sequence_rows": count_multi_sequence_rows(df["Protein Sequence"].tolist()),
     }
     if has_substrates:
-        valid_response["csv_type"] = "full_reaction" if has_products else "substrate_list"
+        valid_response["csv_type"] = "full_reaction" if has_products else "multi"
     else:
         if not has_substrate:
             return JsonResponse(
@@ -70,19 +70,7 @@ def detect_csv_format(request):
                 },
                 status=400,
             )
-        # Single-column substrate schema:
-        # - "single": one substrate string per row
-        # - "multi":  co-substrates dot-joined in the same "Substrate" cell
-        substrate_series = df["Substrate"].dropna().astype(str).str.strip()
-        has_dot_joined_substrate = substrate_series.apply(
-            lambda text: (
-                bool(text)
-                and text.lower() not in {"none", "nan"}
-                and not text.startswith("InChI=")
-                and "." in text
-            )
-        ).any()
-        valid_response["csv_type"] = "multi" if has_dot_joined_substrate else "single"
+        valid_response["csv_type"] = "single"
     return JsonResponse(valid_response, status=200)
 
 

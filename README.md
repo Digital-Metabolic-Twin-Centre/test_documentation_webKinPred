@@ -298,9 +298,9 @@ contains `histogram_max`, `histogram_mean` (10-bin arrays, 0–100% identity),
 
 Supported input schemas are:
 
-- `Protein Sequence, Substrate` for one molecular input. Legacy dot-joined
-  CatPred kcat inputs remain supported for API compatibility only.
-- `Protein Sequence, Substrates` for an ordered, semicolon-separated list.
+- `Protein Sequence, Substrate` for one molecular input.
+- `Protein Sequence, Substrates` for a Multi-Substrate input: an ordered,
+  semicolon-separated list.
 - `Protein Sequence, Substrates, Products` for a full reaction. `Products` is
   required by TurNup and is preserved but ignored by substrate-pair methods.
 

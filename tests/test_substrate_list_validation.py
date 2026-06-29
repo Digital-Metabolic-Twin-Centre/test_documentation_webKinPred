@@ -98,22 +98,15 @@ class SubstrateListValidationTests(unittest.TestCase):
             )
         )
 
-        legacy_df = pd.DataFrame(
+        single_df = pd.DataFrame(
             {"Protein Sequence": ["MKT"], "Substrate": ["CCO.O"]}
         )
-        self.assertIsNone(
+        self.assertIn(
+            "Substrates",
             validate_required_columns_for_methods(
-                legacy_df,
+                single_df,
                 ["kcat"],
                 {"kcat": "CatPred"},
-            )
-        )
-        self.assertIn(
-            "only for legacy CatPred kcat",
-            validate_required_columns_for_methods(
-                legacy_df,
-                ["Km"],
-                {"Km": "CatPred"},
             ),
         )
 
@@ -126,7 +119,7 @@ class SubstrateListValidationTests(unittest.TestCase):
             ["kcat"],
             {"kcat": "CatPred"},
         )
-        self.assertIn("requires semicolon-separated 'Substrates'", error)
+        self.assertIn("Substrates", error)
 
     @patch("api.utils.job_utils.get_experimental.lookup_experimental")
     def test_catpred_experimental_lookup_runs_only_for_expanded_km(self, lookup):
@@ -164,6 +157,18 @@ class SubstrateListValidationTests(unittest.TestCase):
                 ["kcat", "Km"],
                 {"kcat": "TurNup", "Km": "UniKP"},
             )
+        )
+
+    def test_full_reaction_is_accepted_by_catpred_native_multi(self):
+        df = pd.DataFrame(
+            {
+                "Protein Sequence": ["MKT"],
+                "Substrates": ["CCO;O"],
+                "Products": ["CC=O"],
+            }
+        )
+        self.assertIsNone(
+            validate_required_columns_for_methods(df, ["kcat"], {"kcat": "CatPred"})
         )
 
     def test_protein_sequence_lists_validate_each_position(self):

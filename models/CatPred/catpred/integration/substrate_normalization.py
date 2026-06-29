@@ -8,7 +8,7 @@ from rdkit import Chem, rdBase
 
 
 def substrate_components(value: Any) -> list[str]:
-    """Return ordered components from semicolon, collection, or legacy-dot input."""
+    """Return ordered components from semicolon-separated strings or collections."""
     if isinstance(value, (list, tuple)):
         components: list[str] = []
         for item in value:
@@ -25,7 +25,7 @@ def substrate_components(value: Any) -> list[str]:
         return components
     if text.startswith("InChI="):
         return [text]
-    return [component.strip() for component in text.split(".") if component.strip()]
+    return [text]
 
 
 def normalize_catpred_substrates(value: Any, *, canonicalize: bool = True) -> str:

@@ -35,7 +35,7 @@ export default function MethodPicker({
   const visibleTargets = TARGET_ORDER.filter((target) => selectedTargets.includes(target));
 
   const methodLabel = (key) => methods?.[key]?.displayName ?? key;
-  const isListFormat = ['substrate_list', 'full_reaction'].includes(csvFormatInfo?.csv_type);
+  const isListFormat = ['multi', 'full_reaction'].includes(csvFormatInfo?.csv_type);
 
   const methodBehavior = (key, target) => (
     methods?.[key]?.inputBehaviorByTarget?.[target] || 'expanded_pair'

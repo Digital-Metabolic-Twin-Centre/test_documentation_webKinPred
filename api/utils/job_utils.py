@@ -151,8 +151,8 @@ def validate_required_columns_for_methods(
     Validate CSV columns for selected methods.
 
     Pair-based methods accept either ``Substrate`` or ``Substrates``. CatPred
-    kcat accepts semicolon lists natively (plus legacy dot input), while
-    TurNup requires both ``Substrates`` and ``Products``.
+    kcat accepts semicolon-separated ``Substrates`` natively, while TurNup
+    requires both ``Substrates`` and ``Products``.
     """
     from api.methods.registry import get
 
@@ -184,7 +184,7 @@ def validate_required_columns_for_methods(
             if not has_products:
                 missing.add("Products")
         elif behavior == "native_multi":
-            if not has_substrate:
+            if not has_substrates:
                 missing.add("Substrates")
         else:
             if not (has_substrate or has_substrates):

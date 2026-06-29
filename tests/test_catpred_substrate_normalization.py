@@ -12,11 +12,9 @@ except ModuleNotFoundError as exc:
 
 @unittest.skipIf(_IMPORT_ERROR is not None, f"CatPred normalization dependencies unavailable: {_IMPORT_ERROR}")
 class CatPredSubstrateNormalizationTests(unittest.TestCase):
-    def test_semicolon_and_legacy_dot_are_equivalent(self):
-        self.assertEqual(
-            normalize_catpred_substrates("CCO;O"),
-            normalize_catpred_substrates("CCO.O"),
-        )
+    def test_semicolon_input_becomes_catpred_dot_joined_smiles(self):
+        self.assertEqual(normalize_catpred_substrates("CCO;O"), "CCO.O")
+        self.assertEqual(substrate_components("CCO.O"), ["CCO.O"])
 
     def test_collection_preserves_order_duplicates_and_ignores_empty_fragments(self):
         self.assertEqual(substrate_components([" CCO ", "", "O", "CCO"]), ["CCO", "O", "CCO"])
