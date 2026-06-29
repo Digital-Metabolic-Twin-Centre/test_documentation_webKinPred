@@ -19,10 +19,12 @@ from typing import Callable
 
 import numpy as np
 import torch
-from rdkit import Chem
+from rdkit import Chem, RDLogger
 from rdkit.Chem import MACCSkeys
 from torch.utils.data import DataLoader, Dataset
 from transformers import T5EncoderModel, T5Tokenizer
+
+RDLogger.DisableLog("rdApp.warning")
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _REPO_ROOT_STR = str(_REPO_ROOT)
