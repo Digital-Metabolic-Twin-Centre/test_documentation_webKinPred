@@ -22,7 +22,7 @@ const FORMAT_SPECS = [
     methods: ['CatPred (kcat)'],
     columns: [
       { col: 'Protein Sequence', desc: 'full amino-acid sequence' },
-      { col: 'Substrates',       desc: <span>ordered values joined with <code className="fmt-dot">;</code></span> },
+      { col: 'Substrates',        desc: 'semicolon-separated SMILES or InChI' },
     ],
   },
   {
