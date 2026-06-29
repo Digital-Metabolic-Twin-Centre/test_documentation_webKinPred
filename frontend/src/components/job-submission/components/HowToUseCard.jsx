@@ -194,16 +194,18 @@ export default function HowToUseCard({ methods = {} }) {
           ))}
         </div>
 
-        <Alert variant="warning" className="d-flex align-items-center howto-limit-alert mt-3 mb-0">
-          <ExclamationTriangle size={24} className="me-3 howto-limit-icon" />
-          <div>
-            <strong>Single-substrate methods also accept Multi-Substrate and Full-Reaction files.</strong>{' '}
-            They predict every semicolon-separated substrate independently: k<sub>cat</sub> is set to the maximum prediction.
-            <span className="d-block mt-1">
+        <div className="howto-note mt-3">
+          <span className="howto-note-tag">Note</span>
+          <div className="howto-note-body">
+            <p className="howto-note-line">
+              <strong>Single-substrate methods also accept Multi-Substrate and Full-Reaction files.</strong>{' '}
+              They predict every semicolon-separated substrate independently: k<sub>cat</sub> is set to the maximum prediction.
+            </p>
+            <p className="howto-note-line">
               <code>Protein Sequence</code> may also contain <code>;</code>-separated candidate sequences; output stays one row, using max k<sub>cat</sub>, min K<sub>M</sub>, and max k<sub>cat</sub>/K<sub>M</sub>.
-            </span>
+            </p>
           </div>
-        </Alert>
+        </div>
 
         <hr className="my-4" />
         <h4 className="text-center mb-3">Example Templates</h4>
