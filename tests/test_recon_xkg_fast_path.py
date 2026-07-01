@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+import json
 import os
 import sys
 import unittest
@@ -19,10 +21,9 @@ try:
     import pandas as pd
 
     django.setup()
-    from django.test import TestCase
+    from django.test import RequestFactory, TestCase
     from api.models import Job, JobProgressStage
     from api.services.job_service import (
-        _try_complete_recon_xkg_job,
         process_job_submission_from_params,
     )
     from api.services.job_progress_service import (
@@ -43,6 +44,8 @@ try:
     )
     from api.services.result_service import serialize_result_csv
     from api.services.similarity_service import append_kcat_similarity_columns_to_output_csv
+    from api.tasks import run_recon_xkg_cache_prediction
+    from api.views.v1_views import api_submit_job
 
     _IMPORT_ERROR = None
 except ModuleNotFoundError as exc:
@@ -447,9 +450,14 @@ class ReconXkgProgressScalingTests(TestCase):
 
 
 @unittest.skipIf(_IMPORT_ERROR is not None, f"Server dependencies unavailable: {_IMPORT_ERROR}")
-class ImmediateCompletionTests(unittest.TestCase):
+class CacheTaskTests(unittest.TestCase):
     def setUp(self):
-        self.job = SimpleNamespace(public_id="job-1")
+        self.job = SimpleNamespace(
+            public_id="job-1",
+            pk=1,
+            status="Pending",
+            handle_long_sequences="truncate",
+        )
         self.params = {
             "targets": ["kcat"],
             "methods": {"kcat": "DLKcat"},
@@ -460,43 +468,94 @@ class ImmediateCompletionTests(unittest.TestCase):
         }
         self.snapshot = ReconXkgCacheSnapshot({"key": 1.0}, {})
         self.hit = ReconXkgPreflightResult(True, self.snapshot, "full-cache-hit", 1, 1, 0)
+        self.miss = ReconXkgPreflightResult(
+            False, None, "prediction-cache-miss", 1, 1, 0
+        )
 
-    def test_hit_runs_strict_executor_without_queueing(self):
-        with patch("api.services.job_service.get_method", return_value=_Descriptor()), patch(
-            "api.services.job_service.preflight_recon_xkg_cache", return_value=self.hit
-        ), patch("api.services.job_service.execute_multi_prediction_job") as execute:
-            completed = _try_complete_recon_xkg_job(
-                job=self.job,
-                params=self.params,
-                dataframe=MagicMock(),
-                experimental_results={},
-            )
+    def _run_task(self):
+        run_recon_xkg_cache_prediction.run(
+            self.job.public_id,
+            self.params["targets"],
+            self.params["methods"],
+            {},
+            self.params["canonicalize_substrates"],
+            self.params["include_similarity_columns"],
+            self.params["disable_gpu_precompute"],
+        )
 
-        self.assertTrue(completed)
+    def test_full_hit_runs_strict_executor_without_normal_queueing(self):
+        with patch("api.tasks.Job.objects.get", return_value=self.job), patch(
+            "api.tasks.get_method", return_value=_Descriptor()
+        ), patch(
+            "api.tasks._load_recon_xkg_preflight_dataframe", return_value=MagicMock()
+        ), patch(
+            "api.tasks.preflight_recon_xkg_cache", return_value=self.hit
+        ), patch("api.tasks.execute_multi_prediction_job") as execute, patch(
+            "api.tasks._dispatch_recon_xkg_fallback_task"
+        ) as fallback:
+            self._run_task()
+
+        fallback.assert_not_called()
+        execute.assert_called_once()
         self.assertTrue(execute.call_args.kwargs["cache_only"])
+        self.assertTrue(execute.call_args.kwargs["recon_xkg"])
         self.assertEqual(execute.call_args.kwargs["prediction_cache_snapshot"], {"key": 1.0})
 
-    def test_assembly_failure_resets_job_for_one_normal_dispatch(self):
-        with patch("api.services.job_service.get_method", return_value=_Descriptor()), patch(
-            "api.services.job_service.preflight_recon_xkg_cache", return_value=self.hit
+    def test_preflight_miss_dispatches_one_normal_recon_task(self):
+        with patch("api.tasks.Job.objects.get", return_value=self.job), patch(
+            "api.tasks.get_method", return_value=_Descriptor()
         ), patch(
-            "api.services.job_service.execute_multi_prediction_job",
-            side_effect=RuntimeError("assembly failed"),
-        ), patch("api.services.job_service._reset_job_after_cache_only_failure") as reset:
-            completed = _try_complete_recon_xkg_job(
-                job=self.job,
-                params=self.params,
-                dataframe=MagicMock(),
-                experimental_results={},
-            )
+            "api.tasks._load_recon_xkg_preflight_dataframe", return_value=MagicMock()
+        ), patch(
+            "api.tasks.preflight_recon_xkg_cache", return_value=self.miss
+        ), patch("api.tasks.execute_multi_prediction_job") as execute, patch(
+            "api.tasks._dispatch_recon_xkg_fallback_task"
+        ) as fallback:
+            self._run_task()
 
-        self.assertFalse(completed)
+        execute.assert_not_called()
+        fallback.assert_called_once()
+        self.assertEqual(fallback.call_args.kwargs["reason"], "prediction-cache-miss")
+
+    def test_preflight_error_dispatches_one_normal_recon_task(self):
+        with patch("api.tasks.Job.objects.get", return_value=self.job), patch(
+            "api.tasks.get_method", return_value=_Descriptor()
+        ), patch(
+            "api.tasks._load_recon_xkg_preflight_dataframe", return_value=MagicMock()
+        ), patch(
+            "api.tasks.preflight_recon_xkg_cache", side_effect=RuntimeError("store down")
+        ), patch("api.tasks.execute_multi_prediction_job") as execute, patch(
+            "api.tasks._dispatch_recon_xkg_fallback_task"
+        ) as fallback:
+            self._run_task()
+
+        execute.assert_not_called()
+        fallback.assert_called_once()
+        self.assertEqual(fallback.call_args.kwargs["reason"], "preflight-error")
+
+    def test_assembly_failure_resets_job_for_one_normal_dispatch(self):
+        with patch("api.tasks.Job.objects.get", return_value=self.job), patch(
+            "api.tasks.get_method", return_value=_Descriptor()
+        ), patch(
+            "api.tasks._load_recon_xkg_preflight_dataframe", return_value=MagicMock()
+        ), patch(
+            "api.tasks.preflight_recon_xkg_cache", return_value=self.hit
+        ), patch(
+            "api.tasks.execute_multi_prediction_job",
+            side_effect=RuntimeError("assembly failed"),
+        ), patch("api.tasks._reset_job_after_cache_only_failure") as reset, patch(
+            "api.tasks._dispatch_recon_xkg_fallback_task"
+        ) as fallback:
+            self._run_task()
+
         reset.assert_called_once_with(self.job)
+        fallback.assert_called_once()
+        self.assertEqual(fallback.call_args.kwargs["reason"], "cache-only-assembly-failed")
 
 
 @unittest.skipIf(_IMPORT_ERROR is not None, f"Server dependencies unavailable: {_IMPORT_ERROR}")
 class SubmissionDispatchTests(unittest.TestCase):
-    def _submit(self, recon_xkg: bool, immediate: bool):
+    def _submit(self, recon_xkg: bool):
         dataframe = pd.DataFrame(
             {"Protein Sequence": ["AAA"], "Substrate": ["C"]}
         )
@@ -531,37 +590,73 @@ class SubmissionDispatchTests(unittest.TestCase):
         ), patch("api.services.job_service.create_job_directory", return_value="/tmp/job-1"), patch(
             "api.services.job_service.save_job_input_file"
         ), patch(
-            "api.services.job_service._try_complete_recon_xkg_job",
-            return_value=immediate,
-        ) as attempt, patch("api.services.job_service.dispatch_prediction_task") as dispatch:
+            "api.services.job_service.dispatch_recon_xkg_cache_task"
+        ) as cache_dispatch, patch(
+            "api.services.job_service.dispatch_prediction_task"
+        ) as dispatch:
             error, success = process_job_submission_from_params(
                 params,
                 MagicMock(),
                 "127.0.0.1",
                 user=MagicMock(),
             )
-        return error, success, attempt, dispatch
+        return error, success, cache_dispatch, dispatch
 
-    def test_full_hit_skips_celery_dispatch(self):
-        error, success, attempt, dispatch = self._submit(True, True)
+    def test_recon_submission_dispatches_cache_task_only(self):
+        error, success, cache_dispatch, dispatch = self._submit(True)
         self.assertIsNone(error)
-        self.assertTrue(success["completed_immediately"])
-        attempt.assert_called_once()
+        self.assertFalse(success["completed_immediately"])
+        cache_dispatch.assert_called_once()
         dispatch.assert_not_called()
 
-    def test_miss_dispatches_exactly_once(self):
-        error, success, attempt, dispatch = self._submit(True, False)
+    def test_non_recon_submission_does_not_preflight(self):
+        error, success, cache_dispatch, dispatch = self._submit(False)
         self.assertIsNone(error)
         self.assertFalse(success["completed_immediately"])
-        attempt.assert_called_once()
+        cache_dispatch.assert_not_called()
         dispatch.assert_called_once()
 
-    def test_non_recon_submission_does_not_preflight(self):
-        error, success, attempt, dispatch = self._submit(False, False)
-        self.assertIsNone(error)
-        self.assertFalse(success["completed_immediately"])
-        attempt.assert_not_called()
-        dispatch.assert_called_once()
+
+@unittest.skipIf(_IMPORT_ERROR is not None, f"Server dependencies unavailable: {_IMPORT_ERROR}")
+class ApiSubmitResponseTests(unittest.TestCase):
+    def test_v1_submit_returns_pending_recon_job_without_result_assembly(self):
+        request = RequestFactory().post("/api/v1/submit/", data={})
+        request.api_key = SimpleNamespace(pk=20)
+        request.api_user = MagicMock()
+        request.api_request_ip = "127.0.0.1"
+        request.api_quota_subject = "apikey:20"
+        request.api_daily_limit = 1000
+
+        params = {
+            "targets": ["kcat"],
+            "methods": {"kcat": "DLKcat"},
+            "handle_long_sequences": "truncate",
+            "use_experimental": False,
+            "include_similarity_columns": False,
+            "canonicalize_substrates": True,
+            "disable_gpu_precompute": False,
+            "recon_xkg": True,
+        }
+        success = {"public_id": "job-1", "completed_immediately": False}
+
+        with patch(
+            "api.views.v1_views._parse_multipart_body",
+            return_value=(MagicMock(), params, None),
+        ), patch(
+            "api.views.v1_views.resolve_recon_xkg", return_value=True
+        ), patch(
+            "api.views.v1_views.process_job_submission_from_params",
+            return_value=(None, success),
+        ) as submit:
+            response = inspect.unwrap(api_submit_job)(request)
+
+        submit.assert_called_once()
+        self.assertEqual(response.status_code, 201)
+        payload = json.loads(response.content)
+        self.assertEqual(payload["jobId"], "job-1")
+        self.assertEqual(payload["status"], "Pending")
+        self.assertEqual(payload["statusUrl"], "/api/v1/status/job-1/")
+        self.assertEqual(payload["resultUrl"], "/api/v1/result/job-1/")
 
 
 @unittest.skipIf(_IMPORT_ERROR is not None, f"Server dependencies unavailable: {_IMPORT_ERROR}")

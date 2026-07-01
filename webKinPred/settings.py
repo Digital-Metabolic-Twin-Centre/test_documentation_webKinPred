@@ -203,6 +203,10 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TASK_SEND_SENT_EVENT = True
 CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_ROUTES = {
+    "api.tasks.run_recon_xkg_cache_prediction": {"queue": "webkinpred-cache"},
+    "api.tasks.*": {"queue": "webkinpred"},
+}
 CELERY_WORKER_HIJACK_ROOT_LOGGER = False
 CELERY_WORKER_REDIRECT_STDOUTS = False
 

@@ -104,6 +104,7 @@ if not DEBUG:
 
 # Celery task routing
 CELERY_TASK_ROUTES = {
+    "api.tasks.run_recon_xkg_cache_prediction": {"queue": "webkinpred-cache"},
     "api.tasks.*": {"queue": "webkinpred"},
 }
 

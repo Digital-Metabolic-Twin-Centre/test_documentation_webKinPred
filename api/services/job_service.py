@@ -3,17 +3,13 @@ Job service that orchestrates job submission and management workflows.
 """
 
 import logging
-import time
 from typing import Any, Dict, Optional, Tuple
 
-from api.methods.registry import get as get_method
-from api.models import Job, JobProgressStage
+from api.models import Job
 from api.services.about_stats_service import mark_about_stats_cache_stale
-from api.services.recon_xkg_preflight_service import preflight_recon_xkg_cache
-from api.tasks import execute_multi_prediction_job, run_multi_prediction
+from api.tasks import run_multi_prediction, run_recon_xkg_cache_prediction
 from api.utils.job_utils import (
     canonical_prediction_type,
-    canonicalise_targets,
     create_job_directory,
     create_job_status_response_data,
     create_rate_limit_headers,
@@ -215,120 +211,15 @@ def process_job_submission_from_params(
     save_job_input_file(file, job_dir)
 
     if params.get("recon_xkg", False):
-        completed_immediately = _try_complete_recon_xkg_job(
-            job=job,
-            params=params,
-            dataframe=dataframe,
-            experimental_results=experimental_results or {},
-        )
-        if completed_immediately:
-            return None, {
-                "message": "Job completed from cache",
-                "public_id": job.public_id,
-                "completed_immediately": True,
-            }
-
-    dispatch_prediction_task(job.public_id, params, experimental_results)
+        dispatch_recon_xkg_cache_task(job.public_id, params, experimental_results)
+    else:
+        dispatch_prediction_task(job.public_id, params, experimental_results)
 
     return None, {
         "message": "Job submitted successfully",
         "public_id": job.public_id,
         "completed_immediately": False,
     }
-
-
-def _try_complete_recon_xkg_job(
-    *,
-    job: Job,
-    params: Dict[str, Any],
-    dataframe,
-    experimental_results: dict,
-) -> bool:
-    """Complete a proven full-cache job synchronously, otherwise return False."""
-    started = time.monotonic()
-    try:
-        targets = canonicalise_targets(params["targets"])
-        descriptors = {
-            target: get_method(params["methods"][target]) for target in targets
-        }
-        preflight = preflight_recon_xkg_cache(
-            dataframe=dataframe,
-            targets=targets,
-            descriptors=descriptors,
-            handle_long_sequences=params["handle_long_sequences"],
-            canonicalize_substrates=params.get("canonicalize_substrates", True),
-            include_similarity_columns=params.get("include_similarity_columns", True),
-            job_public_id=job.public_id,
-        )
-        if not preflight.complete or preflight.snapshot is None:
-            return False
-
-        execute_multi_prediction_job(
-            public_id=job.public_id,
-            targets=targets,
-            methods=params["methods"],
-            experimental_results=experimental_results,
-            canonicalize_substrates=params.get("canonicalize_substrates", True),
-            include_similarity_columns=params.get("include_similarity_columns", True),
-            disable_gpu_precompute=params.get("disable_gpu_precompute", False),
-            recon_xkg=True,
-            prediction_cache_snapshot=preflight.snapshot.predictions,
-            similarity_cache_snapshot=preflight.snapshot.similarities,
-            cache_only=True,
-        )
-        _log.info(
-            "ReconXKG job completed synchronously from cache",
-            extra={
-                "event": "recon_xkg.immediate_completion",
-                "job_public_id": job.public_id,
-                "prediction_units": preflight.prediction_units,
-                "unique_prediction_keys": preflight.unique_prediction_keys,
-                "similarity_sequences": preflight.similarity_sequences,
-                "elapsed_ms": round((time.monotonic() - started) * 1000, 2),
-            },
-        )
-        return True
-    except Exception:
-        _log.warning(
-            "ReconXKG synchronous assembly failed; queueing job normally",
-            extra={
-                "event": "recon_xkg.immediate_completion_failed",
-                "job_public_id": job.public_id,
-                "elapsed_ms": round((time.monotonic() - started) * 1000, 2),
-            },
-            exc_info=True,
-        )
-        try:
-            _reset_job_after_cache_only_failure(job)
-        except Exception:
-            # The worker reinitialises status and stages on entry, so cleanup
-            # failure must not prevent the single normal fallback dispatch.
-            _log.warning(
-                "Could not fully reset failed ReconXKG synchronous attempt",
-                extra={
-                    "event": "recon_xkg.immediate_cleanup_failed",
-                    "job_public_id": job.public_id,
-                },
-                exc_info=True,
-            )
-        return False
-
-
-def _reset_job_after_cache_only_failure(job: Job) -> None:
-    """Return an attempted synchronous job to a clean queueable state."""
-    JobProgressStage.objects.filter(job=job).delete()
-    Job.objects.filter(pk=job.pk).update(
-        status="Pending",
-        start_time=None,
-        completion_time=None,
-        error_message="",
-        output_file=None,
-        total_molecules=0,
-        molecules_processed=0,
-        invalid_rows=0,
-        total_predictions=0,
-        predictions_made=0,
-    )
 
 
 def handle_quota_validation(
@@ -472,6 +363,46 @@ def dispatch_prediction_task(
             "include_similarity_columns": include_similarity_columns,
             "disable_gpu_precompute": disable_gpu_precompute,
             "recon_xkg": recon_xkg,
+        },
+    )
+
+
+def dispatch_recon_xkg_cache_task(
+    public_id: str,
+    params: Dict[str, Any],
+    experimental_results: Optional[dict],
+) -> None:
+    """Dispatch ReconXKG cache preflight/assembly to the dedicated cache queue."""
+    targets = params["targets"]
+    methods = params["methods"]
+    canonicalize_substrates = params.get("canonicalize_substrates", True)
+    include_similarity_columns = params.get("include_similarity_columns", True)
+    disable_gpu_precompute = params.get("disable_gpu_precompute", False)
+
+    result = run_recon_xkg_cache_prediction.apply_async(
+        args=[
+            public_id,
+            targets,
+            methods,
+            experimental_results or {},
+            canonicalize_substrates,
+            include_similarity_columns,
+            disable_gpu_precompute,
+        ],
+        queue="webkinpred-cache",
+    )
+    _log.info(
+        "ReconXKG cache task dispatched",
+        extra={
+            "event": "job.recon_xkg_cache_task_dispatched",
+            "job_public_id": public_id,
+            "celery_task_id": result.id,
+            "targets": targets,
+            "methods": methods,
+            "canonicalize_substrates": canonicalize_substrates,
+            "include_similarity_columns": include_similarity_columns,
+            "disable_gpu_precompute": disable_gpu_precompute,
+            "recon_xkg": True,
         },
     )
 

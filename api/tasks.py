@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from typing import Any
 
 import pandas as pd
@@ -32,7 +33,7 @@ from django.utils import timezone
 
 from api.methods.base import PredictionError
 from api.methods.registry import get as get_method
-from api.models import Job
+from api.models import Job, JobProgressStage
 from api.observability.context import log_context
 from api.prediction_engines.generic_subprocess import run_generic_subprocess_prediction
 from api.services.about_stats_service import refresh_about_stats_cache
@@ -50,6 +51,7 @@ from api.services.prediction_batch_service import (
     build_sequence_batch_plan,
     build_target_batch_plan,
 )
+from api.services.recon_xkg_preflight_service import preflight_recon_xkg_cache
 from api.services.similarity_service import append_kcat_similarity_columns_to_output_csv
 from api.utils.extra_info import _source, build_extra_info
 from api.utils.job_utils import canonicalise_targets
@@ -352,6 +354,209 @@ def run_multi_prediction(
             error_message=_sanitise_unexpected(e, label),
             completion_time=timezone.now(),
         )
+
+
+@shared_task
+def run_recon_xkg_cache_prediction(
+    public_id: str,
+    targets: list[str],
+    methods: dict[str, str],
+    experimental_results: dict | None = None,
+    canonicalize_substrates: bool = True,
+    include_similarity_columns: bool = True,
+    disable_gpu_precompute: bool = False,
+) -> None:
+    """
+    Attempt ReconXKG full-cache completion outside the HTTP request path.
+
+    A full cache hit is assembled with the strict cache-only executor. Any miss
+    or cache-only assembly failure falls back to the normal ReconXKG task, which
+    computes only cache misses and writes them back.
+    """
+    job = Job.objects.get(public_id=public_id)
+    if job.status == "Completed":
+        _log.info(
+            "Skipping ReconXKG cache task — job already completed",
+            extra={"event": "recon_xkg.cache_task_duplicate_skipped", "job_public_id": public_id},
+        )
+        return
+
+    try:
+        ordered_targets = canonicalise_targets(targets)
+        descriptors = {
+            target: get_method(methods[target]) for target in ordered_targets
+        }
+        dataframe = _load_recon_xkg_preflight_dataframe(public_id)
+        preflight = preflight_recon_xkg_cache(
+            dataframe=dataframe,
+            targets=ordered_targets,
+            descriptors=descriptors,
+            handle_long_sequences=job.handle_long_sequences,
+            canonicalize_substrates=canonicalize_substrates,
+            include_similarity_columns=include_similarity_columns,
+            job_public_id=public_id,
+        )
+    except Exception as exc:
+        _log.warning(
+            "ReconXKG cache preflight failed; queueing normal prediction",
+            extra={
+                "event": "recon_xkg.cache_preflight_failed",
+                "job_public_id": public_id,
+                "exception_type": type(exc).__name__,
+            },
+            exc_info=True,
+        )
+        _dispatch_recon_xkg_fallback_task(
+            public_id=public_id,
+            targets=targets,
+            methods=methods,
+            experimental_results=experimental_results,
+            canonicalize_substrates=canonicalize_substrates,
+            include_similarity_columns=include_similarity_columns,
+            disable_gpu_precompute=disable_gpu_precompute,
+            reason="preflight-error",
+        )
+        return
+
+    if not preflight.complete or preflight.snapshot is None:
+        _log.info(
+            "ReconXKG cache preflight missed; queueing normal prediction",
+            extra={
+                "event": "recon_xkg.cache_preflight_miss_fallback",
+                "job_public_id": public_id,
+                "reason": preflight.reason,
+                "prediction_units": preflight.prediction_units,
+                "unique_prediction_keys": preflight.unique_prediction_keys,
+                "similarity_sequences": preflight.similarity_sequences,
+            },
+        )
+        _dispatch_recon_xkg_fallback_task(
+            public_id=public_id,
+            targets=targets,
+            methods=methods,
+            experimental_results=experimental_results,
+            canonicalize_substrates=canonicalize_substrates,
+            include_similarity_columns=include_similarity_columns,
+            disable_gpu_precompute=disable_gpu_precompute,
+            reason=preflight.reason,
+        )
+        return
+
+    started = time.monotonic()
+    try:
+        execute_multi_prediction_job(
+            public_id=public_id,
+            targets=ordered_targets,
+            methods=methods,
+            experimental_results=experimental_results or {},
+            canonicalize_substrates=canonicalize_substrates,
+            include_similarity_columns=include_similarity_columns,
+            disable_gpu_precompute=disable_gpu_precompute,
+            recon_xkg=True,
+            prediction_cache_snapshot=preflight.snapshot.predictions,
+            similarity_cache_snapshot=preflight.snapshot.similarities,
+            cache_only=True,
+        )
+        _log.info(
+            "ReconXKG job completed asynchronously from cache",
+            extra={
+                "event": "recon_xkg.async_completion",
+                "job_public_id": public_id,
+                "prediction_units": preflight.prediction_units,
+                "unique_prediction_keys": preflight.unique_prediction_keys,
+                "similarity_sequences": preflight.similarity_sequences,
+                "elapsed_ms": round((time.monotonic() - started) * 1000, 2),
+            },
+        )
+    except Exception as exc:
+        _log.warning(
+            "ReconXKG cache-only assembly failed; queueing normal prediction",
+            extra={
+                "event": "recon_xkg.async_completion_failed",
+                "job_public_id": public_id,
+                "exception_type": type(exc).__name__,
+                "elapsed_ms": round((time.monotonic() - started) * 1000, 2),
+            },
+            exc_info=True,
+        )
+        try:
+            _reset_job_after_cache_only_failure(job)
+        except Exception:
+            # The normal worker reinitialises status/stages on entry, so cleanup
+            # failure must not prevent fallback dispatch.
+            _log.warning(
+                "Could not fully reset failed ReconXKG cache-only attempt",
+                extra={
+                    "event": "recon_xkg.async_cleanup_failed",
+                    "job_public_id": public_id,
+                },
+                exc_info=True,
+            )
+        _dispatch_recon_xkg_fallback_task(
+            public_id=public_id,
+            targets=targets,
+            methods=methods,
+            experimental_results=experimental_results,
+            canonicalize_substrates=canonicalize_substrates,
+            include_similarity_columns=include_similarity_columns,
+            disable_gpu_precompute=disable_gpu_precompute,
+            reason="cache-only-assembly-failed",
+        )
+
+
+def _dispatch_recon_xkg_fallback_task(
+    *,
+    public_id: str,
+    targets: list[str],
+    methods: dict[str, str],
+    experimental_results: dict | None,
+    canonicalize_substrates: bool,
+    include_similarity_columns: bool,
+    disable_gpu_precompute: bool,
+    reason: str,
+) -> None:
+    """Queue a normal ReconXKG prediction task on the model worker queue."""
+    result = run_multi_prediction.apply_async(
+        args=[
+            public_id,
+            targets,
+            methods,
+            experimental_results or {},
+            canonicalize_substrates,
+            include_similarity_columns,
+            disable_gpu_precompute,
+            True,
+        ],
+        queue="webkinpred",
+    )
+    _log.info(
+        "ReconXKG fallback prediction task dispatched",
+        extra={
+            "event": "recon_xkg.fallback_task_dispatched",
+            "job_public_id": public_id,
+            "celery_task_id": result.id,
+            "reason": reason,
+            "targets": targets,
+            "methods": methods,
+        },
+    )
+
+
+def _reset_job_after_cache_only_failure(job: Job) -> None:
+    """Return an attempted cache-only job to a clean queueable state."""
+    JobProgressStage.objects.filter(job=job).delete()
+    Job.objects.filter(pk=job.pk).update(
+        status="Pending",
+        start_time=None,
+        completion_time=None,
+        error_message="",
+        output_file=None,
+        total_molecules=0,
+        molecules_processed=0,
+        invalid_rows=0,
+        total_predictions=0,
+        predictions_made=0,
+    )
 
 
 def execute_multi_prediction_job(
@@ -1462,6 +1667,12 @@ def _load_input(job: Job) -> pd.DataFrame:
             "Please ensure it is a valid CSV and try again."
         )
     return df
+
+
+def _load_recon_xkg_preflight_dataframe(public_id: str) -> pd.DataFrame:
+    """Read input for cache preflight without quota side effects."""
+    path = os.path.join(settings.MEDIA_ROOT, "jobs", str(public_id), "input.csv")
+    return pd.read_csv(path)
 
 
 def _output_path(public_id: str) -> str:

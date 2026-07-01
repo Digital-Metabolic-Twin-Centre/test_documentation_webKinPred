@@ -120,7 +120,9 @@ def _context_from_celery_task_payload(record: logging.LogRecord) -> dict[str, An
     if task_name.endswith("run_prediction") and len(args) >= 3:
         method_key = method_key or args[1]
         target = target or args[2]
-    elif task_name.endswith("run_multi_prediction"):
+    elif task_name.endswith("run_multi_prediction") or task_name.endswith(
+        "run_recon_xkg_cache_prediction"
+    ):
         inferred_method_key, inferred_target = _multi_prediction_method_context(args, kwargs)
         method_key = method_key or inferred_method_key
         target = target or inferred_target
