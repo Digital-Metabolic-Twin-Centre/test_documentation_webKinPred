@@ -157,19 +157,18 @@ class CoerceTests(unittest.TestCase):
         for falsy in ("false", "0", "no", "", None, "anything"):
             self.assertFalse(coerce_recon_xkg(falsy), falsy)
 
-    def test_only_deterministic_input_failures_are_negative_cacheable(self):
-        self.assertTrue(
-            store.is_cacheable_failure_reason(
-                "Invalid protein sequence (unsupported amino acid characters)"
-            )
-        )
-        self.assertTrue(
-            store.is_cacheable_failure_reason(
-                "Invalid product (not a valid SMILES or InChI)"
-            )
-        )
-        self.assertFalse(store.is_cacheable_failure_reason("Prediction could not be made"))
-        self.assertFalse(store.is_cacheable_failure_reason("Prediction output missing"))
+    def test_empty_prediction_outcomes_are_negative_cacheable(self):
+        for reason in (
+            "Invalid protein sequence (unsupported amino acid characters)",
+            "Invalid product (not a valid SMILES or InChI)",
+            "Missing substrate",
+            "Unsupported substrate for CatPred: [H+] contains no heavy atoms",
+            "Prediction could not be made",
+            "Prediction output missing",
+        ):
+            self.assertTrue(store.is_cacheable_failure_reason(reason), reason)
+        self.assertFalse(store.is_cacheable_failure_reason(""))
+        self.assertFalse(store.is_cacheable_failure_reason(None))
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +310,7 @@ class CacheWrapperTests(unittest.TestCase):
         self.assertEqual(stats["misses"], 0)
         self.assertEqual(self.engine_calls, [])
 
-    def test_transient_row_failure_is_not_negative_cached(self):
+    def test_generic_row_failure_is_cached_and_replayed(self):
         reason = "Prediction could not be made"
 
         def failed_engine(desc, sequences, public_id, target, **kwargs):
@@ -325,8 +324,31 @@ class CacheWrapperTests(unittest.TestCase):
 
         _predictions, invalid, stats = self._invoke(["CCO"])
         self.assertEqual(invalid, {0: reason})
+        self.assertEqual(stats["hits"], 1)
+        self.assertEqual(stats["misses"], 0)
+        self.assertEqual(self.engine_calls, [])
+
+    def test_missing_prediction_value_is_cached_and_replayed_as_blank(self):
+        reason = "Prediction could not be made"
+
+        def blank_engine(desc, sequences, public_id, target, **kwargs):
+            self.engine_calls.append(list(sequences))
+            return [None] * len(sequences), {}
+
+        self.tasks._run_method_engine = blank_engine
+        predictions, invalid, stats = self._invoke(["CCO"])
+        self.assertEqual(predictions, [None])
+        self.assertEqual(invalid, {0: reason})
         self.assertEqual(stats["misses"], 1)
         self.assertEqual(len(self.engine_calls), 1)
+
+        self.engine_calls.clear()
+        predictions, invalid, stats = self._invoke(["CCO"])
+        self.assertEqual(predictions, [None])
+        self.assertEqual(invalid, {0: reason})
+        self.assertEqual(stats["hits"], 1)
+        self.assertEqual(stats["misses"], 0)
+        self.assertEqual(self.engine_calls, [])
 
     def test_cache_only_snapshot_never_reads_store_or_invokes_engine(self):
         desc = _FakeDesc(

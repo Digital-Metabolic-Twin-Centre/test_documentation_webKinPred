@@ -15,8 +15,8 @@ Design notes
   outputs correct under substrate reordering: per-substrate units are looked up
   individually and reassembled in the caller's input order.
 * We store either the **raw** model output (before RealKcat formatting,
-  substrate reduction, or experimental overrides) or a deterministic row-level
-  validation failure. Everything downstream runs unchanged on reconstructed
+  substrate reduction, or experimental overrides) or a row-level blank outcome
+  with a failure reason. Everything downstream runs unchanged on reconstructed
   outcomes, so cached rows remain byte-for-byte identical to fresh rows.
 * Every operation is best-effort: any failure logs and degrades to normal
   computation rather than raising into the prediction pipeline. Similarity rows
@@ -277,18 +277,8 @@ def cached_outcome_is_valid(raw: Any) -> bool:
 
 
 def is_cacheable_failure_reason(reason: Any) -> bool:
-    """Return whether an engine error is a deterministic input rejection."""
-    text = str(reason or "").strip()
-    return text.startswith(
-        (
-            "Invalid protein sequence",
-            "Invalid substrate",
-            "Invalid product",
-            "Invalid substrate component:",
-            "Missing protein sequence",
-            "Substrate contains multiple disconnected fragments",
-        )
-    )
+    """Return whether an empty engine outcome should be stored as a cache hit."""
+    return bool(str(reason or "").strip())
 
 
 # ---------------------------------------------------------------------------

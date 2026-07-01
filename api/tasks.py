@@ -1553,7 +1553,23 @@ def _invoke_method_prediction_cached(
                 continue  # uncacheable unit — never written back
             value = store.coerce_value(miss_preds[local_index])
             if value is None:
-                continue  # failed/non-numeric — surfaced like a normal failure
+                seq_sha, sub_canon, products_canon = component
+                rows_to_store.append(
+                    {
+                        "lookup_key": key,
+                        "target": target,
+                        "method": desc.key,
+                        "model_version": model_version,
+                        "params_fingerprint": params_fp,
+                        "sequence_sha256": seq_sha,
+                        "substrate_canon": sub_canon,
+                        "products_canon": products_canon,
+                        "value": None,
+                        "failure_reason": "Prediction could not be made",
+                    }
+                )
+                invalid[global_index] = "Prediction could not be made"
+                continue
             seq_sha, sub_canon, products_canon = component
             rows_to_store.append(
                 {
