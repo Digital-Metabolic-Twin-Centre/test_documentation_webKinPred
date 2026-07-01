@@ -178,6 +178,37 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(result.snapshot.predictions, {"a": 1.0, "b": 2.0})
         self.assertEqual(result.snapshot.similarities, {"AAA": (4.0, 8.0)})
 
+    def test_preflight_similarity_includes_skipped_output_rows(self):
+        dataframe = pd.DataFrame(
+            {"Protein Sequence": ["AAAAAA", "AAA"], "Substrate": ["C", "O"]}
+        )
+        with patch(
+            "api.services.recon_xkg_preflight_service.prediction_store.build_unit_keys",
+            return_value=(["a"], [None], "fp"),
+        ), patch(
+            "api.services.recon_xkg_preflight_service.prediction_store.get_many",
+            return_value={"a": 1.0},
+        ), patch(
+            "api.services.recon_xkg_preflight_service.similarity_cache_label_for_method",
+            return_value="Pair data",
+        ), patch(
+            "api.services.recon_xkg_preflight_service.prediction_store.get_similarity_many",
+            return_value={"AAA": (4.0, 8.0)},
+        ) as get_similarity:
+            result = preflight_recon_xkg_cache(
+                dataframe=dataframe,
+                targets=["kcat"],
+                descriptors={"kcat": self.descriptor},
+                handle_long_sequences="skip",
+                canonicalize_substrates=True,
+                include_similarity_columns=True,
+                job_public_id="job-1",
+            )
+
+        self.assertFalse(result.complete)
+        self.assertEqual(result.reason, "similarity-cache-miss")
+        self.assertEqual(set(get_similarity.call_args.args[0]), {"AAAAAA", "AAA"})
+
     def test_preflight_similarity_uses_cached_winning_sequence(self):
         dataframe = pd.DataFrame(
             {"Protein Sequence": ["AAA;CCC"], "Substrates": ["C"]}
@@ -701,6 +732,158 @@ class ResultSerializationTests(unittest.TestCase):
             result["data"][0]["max similarity to PairMethod training data"],
             34.0,
         )
+
+    def test_negative_similarity_snapshot_renders_blank_without_mmseqs(self):
+        import tempfile
+
+        with tempfile.NamedTemporaryFile("w", suffix=".csv") as output:
+            output.write("Protein Sequence,kcat (1/s)\nAAA,1.0\n")
+            output.flush()
+            with patch(
+                "api.services.similarity_service._resolve_similarity_dataset_for_method",
+                return_value=("Pair data", None),
+            ), patch("api.services.similarity_service._compute_mmseqs_similarity") as mmseqs:
+                append_kcat_similarity_columns_to_output_csv(
+                    output.name,
+                    "PairMethod",
+                    recon_xkg=True,
+                    cached_similarity_snapshot={"AAA": (None, None)},
+                    cache_only=True,
+                )
+            result = serialize_result_csv(output.name)
+
+        mmseqs.assert_not_called()
+        self.assertIsNone(
+            result["data"][0]["mean similarity to PairMethod training data"]
+        )
+        self.assertIsNone(
+            result["data"][0]["max similarity to PairMethod training data"]
+        )
+
+    def test_invalid_similarity_sequence_is_cached_as_blank(self):
+        import tempfile
+
+        with tempfile.NamedTemporaryFile("w", suffix=".csv") as output:
+            output.write("Protein Sequence,kcat (1/s)\nAXZ,1.0\nAAA,2.0\n")
+            output.flush()
+            with patch(
+                "api.services.similarity_service._resolve_similarity_dataset_for_method",
+                return_value=("Pair data", "/tmp/pairdb"),
+            ), patch(
+                "api.services.similarity_service.os.path.exists",
+                return_value=True,
+            ), patch(
+                "api.services.prediction_store.get_similarity_many",
+                return_value={},
+            ), patch(
+                "api.services.prediction_store.upsert_similarity_many",
+                return_value=1,
+            ) as upsert, patch(
+                "api.services.similarity_service._compute_mmseqs_similarity",
+                return_value=({"AAA": 34.0}, {"AAA": 12.0}),
+            ) as mmseqs:
+                append_kcat_similarity_columns_to_output_csv(
+                    output.name,
+                    "PairMethod",
+                    recon_xkg=True,
+                )
+            result = serialize_result_csv(output.name)
+
+        mmseqs.assert_called_once()
+        cached_entries = [
+            entry
+            for call in upsert.call_args_list
+            for entry in call.args[0]
+        ]
+        cached_by_sequence = {entry[0]: entry[2:] for entry in cached_entries}
+        self.assertEqual(cached_by_sequence["AXZ"], (None, None))
+        self.assertEqual(cached_by_sequence["AAA"], (12.0, 34.0))
+        self.assertIsNone(
+            result["data"][0]["mean similarity to PairMethod training data"]
+        )
+        self.assertIsNone(
+            result["data"][0]["max similarity to PairMethod training data"]
+        )
+        self.assertEqual(
+            result["data"][1]["mean similarity to PairMethod training data"],
+            12.0,
+        )
+        self.assertEqual(
+            result["data"][1]["max similarity to PairMethod training data"],
+            34.0,
+        )
+
+    def test_missing_similarity_db_is_cached_as_blank(self):
+        import tempfile
+
+        with tempfile.NamedTemporaryFile("w", suffix=".csv") as output:
+            output.write("Protein Sequence,kcat (1/s)\nAAA,1.0\nCCC,2.0\n")
+            output.flush()
+            with patch(
+                "api.services.similarity_service._resolve_similarity_dataset_for_method",
+                return_value=("Pair data", "/tmp/missingdb"),
+            ), patch(
+                "api.services.similarity_service.os.path.exists",
+                return_value=False,
+            ), patch(
+                "api.services.prediction_store.get_similarity_many",
+                return_value={},
+            ), patch(
+                "api.services.prediction_store.upsert_similarity_many",
+                return_value=2,
+            ) as upsert, patch(
+                "api.services.similarity_service._compute_mmseqs_similarity",
+            ) as mmseqs:
+                append_kcat_similarity_columns_to_output_csv(
+                    output.name,
+                    "PairMethod",
+                    recon_xkg=True,
+                )
+            result = serialize_result_csv(output.name)
+
+        mmseqs.assert_not_called()
+        cached_entries = upsert.call_args.args[0]
+        self.assertEqual({entry[0] for entry in cached_entries}, {"AAA", "CCC"})
+        self.assertTrue(all(entry[2:] == (None, None) for entry in cached_entries))
+        for row in result["data"]:
+            self.assertIsNone(row["mean similarity to PairMethod training data"])
+            self.assertIsNone(row["max similarity to PairMethod training data"])
+
+    def test_mmseqs_failure_is_cached_as_blank(self):
+        import tempfile
+
+        with tempfile.NamedTemporaryFile("w", suffix=".csv") as output:
+            output.write("Protein Sequence,kcat (1/s)\nAAA,1.0\nCCC,2.0\n")
+            output.flush()
+            with patch(
+                "api.services.similarity_service._resolve_similarity_dataset_for_method",
+                return_value=("Pair data", "/tmp/pairdb"),
+            ), patch(
+                "api.services.similarity_service.os.path.exists",
+                return_value=True,
+            ), patch(
+                "api.services.prediction_store.get_similarity_many",
+                return_value={},
+            ), patch(
+                "api.services.prediction_store.upsert_similarity_many",
+                return_value=2,
+            ) as upsert, patch(
+                "api.services.similarity_service._compute_mmseqs_similarity",
+                side_effect=RuntimeError("mmseqs failed"),
+            ):
+                append_kcat_similarity_columns_to_output_csv(
+                    output.name,
+                    "PairMethod",
+                    recon_xkg=True,
+                )
+            result = serialize_result_csv(output.name)
+
+        cached_entries = upsert.call_args.args[0]
+        self.assertEqual({entry[0] for entry in cached_entries}, {"AAA", "CCC"})
+        self.assertTrue(all(entry[2:] == (None, None) for entry in cached_entries))
+        for row in result["data"]:
+            self.assertIsNone(row["mean similarity to PairMethod training data"])
+            self.assertIsNone(row["max similarity to PairMethod training data"])
 
 
 if __name__ == "__main__":

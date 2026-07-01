@@ -373,7 +373,9 @@ class SimilarityStore(models.Model):
 
     Similarity is a property of (sequence, training dataset) and is independent
     of substrates or the kinetic value, so it is cached separately. This lets a
-    fully cached kcat job skip MMseqs2 entirely. Routed to ``prediction_store``.
+    fully cached kcat job skip MMseqs2 entirely. ``NULL`` mean/max values are a
+    negative cache hit and render as blank output cells. Routed to
+    ``prediction_store``.
     """
 
     prediction_store_db = True

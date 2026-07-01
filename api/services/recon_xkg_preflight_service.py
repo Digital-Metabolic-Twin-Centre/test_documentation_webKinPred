@@ -15,7 +15,10 @@ from api.services.prediction_batch_service import (
     build_sequence_batch_plan,
     build_target_batch_plan,
 )
-from api.services.similarity_service import similarity_cache_label_for_method
+from api.services.similarity_service import (
+    kcat_similarity_sequences_for_output_rows,
+    similarity_cache_label_for_method,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -132,7 +135,6 @@ def preflight_recon_xkg_cache(
 
             unique_sequences = _cached_similarity_sequences_for_kcat(
                 dataframe=dataframe,
-                sequence_plan=sequence_plan,
                 kcat_batch=target_batches.get("kcat"),
                 kcat_keys=target_keys.get("kcat", []),
                 prediction_values=prediction_values,
@@ -245,7 +247,6 @@ def _valid_similarity_entry(value: Any) -> bool:
 def _cached_similarity_sequences_for_kcat(
     *,
     dataframe: pd.DataFrame,
-    sequence_plan: Any,
     kcat_batch: Any,
     kcat_keys: list[str | None],
     prediction_values: dict[str, Any],
@@ -253,6 +254,7 @@ def _cached_similarity_sequences_for_kcat(
     if kcat_batch is None:
         return []
 
+    selected_sequences: list[str] = [""] * len(dataframe)
     if kcat_batch.unit_expansion is not None:
         from api.utils.sequence_expansion import reduce_sequence_predictions
 
@@ -275,26 +277,11 @@ def _cached_similarity_sequences_for_kcat(
             child_details=None,
             reaction_count=len(dataframe),
         )
-        return list(
-            dict.fromkeys(
-                sequence
-                for sequence in reduced.selected_sequences
-                if _valid_similarity_sequence(sequence)
-            )
-        )
+        selected_sequences = list(reduced.selected_sequences)
 
-    return list(
-        dict.fromkeys(
-            child.sequence
-            for child in sequence_plan.expansion.children
-            if (
-                child.processed_sequence is not None
-                and _valid_similarity_sequence(child.sequence)
-            )
-        )
+    output_like_dataframe = dataframe.copy()
+    output_like_dataframe["Extra Info kcat"] = [""] * len(output_like_dataframe)
+    return kcat_similarity_sequences_for_output_rows(
+        output_like_dataframe,
+        selected_sequences_by_row=selected_sequences,
     )
-
-
-def _valid_similarity_sequence(sequence: str) -> bool:
-    allowed = set("ACDEFGHIKLMNPQRSTVWY")
-    return bool(sequence) and all(char in allowed for char in sequence)

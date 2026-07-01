@@ -37,6 +37,9 @@ class SimilarityCacheOnlyMiss(PredictionError):
     """A strict synchronous run could not use its preflight snapshot."""
 
 
+_SIMILARITY_SEQUENCE_ALPHABET = set("ACDEFGHIKLMNPQRSTVWY")
+
+
 def _find_merged_db() -> tuple[str, str] | tuple[None, None]:
     """Return (merged_db_path, membership_json_path) if both exist, else (None, None)."""
     datasets = SIMILARITY_DATASETS or {}
@@ -287,10 +290,10 @@ def _resolve_similarity_dataset_for_method(method_key: str) -> tuple[Optional[st
     return None, None
 
 
-def similarity_cache_label_for_method(method_key: str) -> str | None:
+def similarity_cache_label_for_method(method_key: str) -> str:
     """Return the persistent-cache dataset label used by output enrichment."""
     label, _target_db = _resolve_similarity_dataset_for_method(method_key)
-    return label
+    return label or method_key
 
 
 def _run_mmseqs_command(cmd: list[str]) -> None:
@@ -440,11 +443,16 @@ def append_kcat_similarity_columns_to_output_csv(
 
     When ``recon_xkg`` is set, per-sequence similarity is served from the
     persistent SimilarityStore and MMseqs2 runs only for sequences not yet
-    cached — so a fully cached job adds these columns without invoking MMseqs2 at
-    all. On any error, both columns are still created with blank values.
+    cached. A cached ``NULL``/``NULL`` pair is a negative cache hit and renders
+    as blank cells, so repeated deterministic failures do not retry MMseqs2.
+    On any error, both columns are still created with blank values.
     """
     mean_col, max_col = _similarity_column_names(kcat_method_key)
     temp_files_to_cleanup: list[str] = []
+    cache_label = kcat_method_key
+    seq_sha_by_seq: dict[str, str] = {}
+    store = None
+    unique_sequences: list[str] = []
 
     try:
         df = pd.read_csv(output_csv_path)
@@ -452,22 +460,8 @@ def append_kcat_similarity_columns_to_output_csv(
             raise ValueError('Output CSV is missing required "Protein Sequence" column')
 
         dataset_label, target_db = _resolve_similarity_dataset_for_method(kcat_method_key)
-        if not target_db and not cache_only:
-            raise ValueError(f"No similarity dataset is configured for method '{kcat_method_key}'")
-        if not cache_only and not (
-            os.path.exists(target_db) or os.path.exists(f"{target_db}.dbtype")
-        ):
-            raise FileNotFoundError(
-                f"Similarity DB for '{dataset_label or kcat_method_key}' not found at {target_db}"
-            )
-
         raw_sequences = _row_similarity_sequences(df, selected_sequences_by_row)
-        unique_sequences: list[str] = []
-        seen: set[str] = set()
-        for seq in raw_sequences:
-            if seq and seq not in seen:
-                seen.add(seq)
-                unique_sequences.append(seq)
+        unique_sequences = _unique_nonempty_sequences(raw_sequences)
 
         if not unique_sequences and cache_only:
             _write_blank_similarity_columns(output_csv_path, mean_col, max_col)
@@ -475,12 +469,10 @@ def append_kcat_similarity_columns_to_output_csv(
         if not unique_sequences:
             raise ValueError("No non-empty protein sequences available for similarity analysis")
 
-        sequence_to_max: dict[str, float] = {}
-        sequence_to_mean: dict[str, float] = {}
+        sequence_to_max: dict[str, float | None] = {}
+        sequence_to_mean: dict[str, float | None] = {}
         sequences_to_compute = unique_sequences
         cache_label = dataset_label or kcat_method_key
-        store = None
-        seq_sha_by_seq: dict[str, str] = {}
 
         if cache_only:
             cached = cached_similarity_snapshot or {}
@@ -491,8 +483,8 @@ def append_kcat_similarity_columns_to_output_csv(
                 )
             for seq in unique_sequences:
                 mean_sim, max_sim = cached[seq]
-                sequence_to_mean[seq] = 0.0 if mean_sim is None else mean_sim
-                sequence_to_max[seq] = 0.0 if max_sim is None else max_sim
+                sequence_to_mean[seq] = mean_sim
+                sequence_to_max[seq] = max_sim
             sequences_to_compute = []
         elif recon_xkg:
             from api.services import prediction_store as store  # noqa: PLC0415
@@ -500,30 +492,104 @@ def append_kcat_similarity_columns_to_output_csv(
             seq_sha_by_seq = {seq: store.sha256_text(seq) for seq in unique_sequences}
             cached = store.get_similarity_many(seq_sha_by_seq, cache_label)
             for seq, (mean_sim, max_sim) in cached.items():
-                sequence_to_mean[seq] = 0.0 if mean_sim is None else mean_sim
-                sequence_to_max[seq] = 0.0 if max_sim is None else max_sim
+                sequence_to_mean[seq] = mean_sim
+                sequence_to_max[seq] = max_sim
             sequences_to_compute = [seq for seq in unique_sequences if seq not in cached]
 
-        if sequences_to_compute:
-            computed_max, computed_mean = _compute_mmseqs_similarity(
-                sequences_to_compute, target_db, temp_files_to_cleanup
+        invalid_sequences = [
+            seq for seq in sequences_to_compute if not _valid_similarity_sequence(seq)
+        ]
+        if invalid_sequences:
+            _mark_blank_similarity_values(
+                invalid_sequences,
+                sequence_to_mean,
+                sequence_to_max,
             )
-            sequence_to_max.update(computed_max)
-            sequence_to_mean.update(computed_mean)
-
             if recon_xkg and store is not None:
-                store.upsert_similarity_many(
-                    [
-                        (
-                            seq,
-                            seq_sha_by_seq[seq],
-                            computed_mean.get(seq, 0.0),
-                            computed_max.get(seq, 0.0),
-                        )
-                        for seq in sequences_to_compute
-                    ],
+                _cache_blank_similarity_entries(
+                    store,
+                    invalid_sequences,
+                    seq_sha_by_seq,
                     cache_label,
                 )
+            invalid_set = set(invalid_sequences)
+            sequences_to_compute = [
+                seq for seq in sequences_to_compute if seq not in invalid_set
+            ]
+
+        if sequences_to_compute:
+            db_available = bool(
+                target_db
+                and (os.path.exists(target_db) or os.path.exists(f"{target_db}.dbtype"))
+            )
+            if not db_available:
+                _log.warning(
+                    "Similarity DB unavailable; using blank similarity values",
+                    extra={
+                        "event": "similarity.output_db_unavailable",
+                        "method_key": kcat_method_key,
+                        "target_db": target_db,
+                        "sequence_count": len(sequences_to_compute),
+                    },
+                )
+                _mark_blank_similarity_values(
+                    sequences_to_compute,
+                    sequence_to_mean,
+                    sequence_to_max,
+                )
+                if recon_xkg and store is not None:
+                    _cache_blank_similarity_entries(
+                        store,
+                        sequences_to_compute,
+                        seq_sha_by_seq,
+                        cache_label,
+                    )
+            else:
+                try:
+                    computed_max, computed_mean = _compute_mmseqs_similarity(
+                        sequences_to_compute, target_db, temp_files_to_cleanup
+                    )
+                except Exception as exc:
+                    _log.warning(
+                        "MMseqs similarity computation failed; using blank similarity values",
+                        extra={
+                            "event": "similarity.output_compute_failed",
+                            "method_key": kcat_method_key,
+                            "target_db": target_db,
+                            "sequence_count": len(sequences_to_compute),
+                            "exception_type": type(exc).__name__,
+                        },
+                        exc_info=True,
+                    )
+                    _mark_blank_similarity_values(
+                        sequences_to_compute,
+                        sequence_to_mean,
+                        sequence_to_max,
+                    )
+                    if recon_xkg and store is not None:
+                        _cache_blank_similarity_entries(
+                            store,
+                            sequences_to_compute,
+                            seq_sha_by_seq,
+                            cache_label,
+                        )
+                else:
+                    sequence_to_max.update(computed_max)
+                    sequence_to_mean.update(computed_mean)
+
+                    if recon_xkg and store is not None:
+                        store.upsert_similarity_many(
+                            [
+                                (
+                                    seq,
+                                    seq_sha_by_seq[seq],
+                                    computed_mean.get(seq, 0.0),
+                                    computed_max.get(seq, 0.0),
+                                )
+                                for seq in sequences_to_compute
+                            ],
+                            cache_label,
+                        )
 
         mean_values: list[float | str] = []
         max_values: list[float | str] = []
@@ -532,8 +598,8 @@ def append_kcat_similarity_columns_to_output_csv(
                 mean_values.append("")
                 max_values.append("")
                 continue
-            mean_values.append(sequence_to_mean.get(seq, 0.0))
-            max_values.append(sequence_to_max.get(seq, 0.0))
+            mean_values.append(_similarity_output_cell(sequence_to_mean.get(seq, 0.0)))
+            max_values.append(_similarity_output_cell(sequence_to_max.get(seq, 0.0)))
 
         df[mean_col] = mean_values
         df[max_col] = max_values
@@ -582,6 +648,64 @@ def _row_similarity_sequences(
         tokens = split_sequence_list(raw_value)
         out.append(tokens[0] if len(tokens) == 1 else "")
     return out
+
+
+def kcat_similarity_sequences_for_output_rows(
+    df: pd.DataFrame,
+    selected_sequences_by_row: list[str] | None = None,
+) -> list[str]:
+    """Return the unique sequence keys kcat output enrichment will require."""
+    return _unique_nonempty_sequences(
+        _row_similarity_sequences(df, selected_sequences_by_row)
+    )
+
+
+def _unique_nonempty_sequences(sequences: list[str]) -> list[str]:
+    unique_sequences: list[str] = []
+    seen: set[str] = set()
+    for seq in sequences:
+        if seq and seq not in seen:
+            seen.add(seq)
+            unique_sequences.append(seq)
+    return unique_sequences
+
+
+def _valid_similarity_sequence(sequence: str) -> bool:
+    return bool(sequence) and all(
+        char in _SIMILARITY_SEQUENCE_ALPHABET for char in sequence
+    )
+
+
+def _mark_blank_similarity_values(
+    sequences: list[str],
+    sequence_to_mean: dict[str, float | None],
+    sequence_to_max: dict[str, float | None],
+) -> None:
+    for seq in sequences:
+        sequence_to_mean[seq] = None
+        sequence_to_max[seq] = None
+
+
+def _cache_blank_similarity_entries(
+    store: Any,
+    sequences: list[str],
+    seq_sha_by_seq: dict[str, str],
+    cache_label: str,
+) -> int:
+    entries = [
+        (
+            seq,
+            seq_sha_by_seq.get(seq) or store.sha256_text(seq),
+            None,
+            None,
+        )
+        for seq in sequences
+    ]
+    return store.upsert_similarity_many(entries, cache_label)
+
+
+def _similarity_output_cell(value: float | None) -> float | str:
+    return "" if value is None else value
 
 
 def _selected_sequence_from_extra_info(value: object) -> str:

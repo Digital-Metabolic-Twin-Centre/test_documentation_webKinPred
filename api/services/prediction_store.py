@@ -19,7 +19,9 @@ Design notes
   validation failure. Everything downstream runs unchanged on reconstructed
   outcomes, so cached rows remain byte-for-byte identical to fresh rows.
 * Every operation is best-effort: any failure logs and degrades to normal
-  computation rather than raising into the prediction pipeline.
+  computation rather than raising into the prediction pipeline. Similarity rows
+  with ``NULL`` mean/max values are deliberate negative cache hits that render
+  as blank output cells.
 """
 
 from __future__ import annotations
@@ -414,7 +416,8 @@ def get_similarity_many(
     Fetch cached (mean, max) similarity for a set of sequences.
 
     ``sequence_sha_by_seq`` maps raw sequence -> its sha256. Returns a dict keyed
-    by raw sequence for the hits only.
+    by raw sequence for the hits only. ``(None, None)`` is a negative cache hit
+    that should render as blank similarity cells.
     """
     from api.models import SimilarityStore
 
@@ -452,7 +455,8 @@ def upsert_similarity_many(
     """
     Upsert per-sequence similarity rows.
 
-    ``entries`` is a list of (sequence, sequence_sha256, mean, max). Best-effort.
+    ``entries`` is a list of (sequence, sequence_sha256, mean, max). ``None``
+    mean/max values intentionally cache blank output cells. Best-effort.
     """
     from api.models import SimilarityStore
 
