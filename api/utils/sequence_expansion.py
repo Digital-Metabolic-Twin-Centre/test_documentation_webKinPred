@@ -406,7 +406,7 @@ def _reduce_scalar(
         sources[reaction_position] = selected_source
         selected_sequences[reaction_position] = unit.sequence
     else:
-        reason = _failure_reason(plan, reaction_position)
+        reason = _failure_reason(plan, reaction_position, sequence_items)
         sources[reaction_position] = reason
         failed_reactions[reaction_position] = reason
 
@@ -458,7 +458,7 @@ def _reduce_per_substrate_slots(
         else:
             sources[reaction_position] = "Mixed per-substrate sources; see Extra Info"
     else:
-        reason = _failure_reason(plan, reaction_position)
+        reason = _failure_reason(plan, reaction_position, sequence_items)
         sources[reaction_position] = reason
         failed_reactions[reaction_position] = reason
 
@@ -502,11 +502,34 @@ def _mark_selected(
             ) in selected_lookup
 
 
-def _failure_reason(plan: TargetExpansionPlan, reaction_position: int) -> str:
+def _failure_reason(
+    plan: TargetExpansionPlan,
+    reaction_position: int,
+    sequence_items: list[dict[str, Any]],
+) -> str:
     sequence_reason = plan.sequence_plan.skipped_reactions.get(reaction_position)
     if sequence_reason:
         return sequence_reason
+    child_errors = _collect_child_errors(sequence_items)
+    if child_errors:
+        return "; ".join(child_errors)
     return "Prediction could not be made for any sequence"
+
+
+def _collect_child_errors(sequence_items: list[dict[str, Any]]) -> list[str]:
+    """Return the distinct per-candidate error strings, preserving order."""
+    unique: list[str] = []
+    for item in sequence_items:
+        substrates = item.get("substrates")
+        candidates = substrates if isinstance(substrates, list) else [item]
+        for candidate in candidates:
+            error = candidate.get("error")
+            if not error:
+                continue
+            error = str(error).strip()
+            if error and error not in unique:
+                unique.append(error)
+    return unique
 
 
 def _normalise_child_errors(errors: dict[int, str], child_count: int) -> dict[int, str]:

@@ -184,7 +184,7 @@ def reduce_substrate_predictions(
                 predictions[reaction_position] = selected_value
                 sources[reaction_position] = selected_source
             else:
-                reason = "Prediction could not be made for any substrate"
+                reason = _failure_reason(items)
                 sources[reaction_position] = reason
                 failed_reactions[reaction_position] = reason
 
@@ -206,7 +206,7 @@ def reduce_substrate_predictions(
                 else:
                     sources[reaction_position] = "Mixed per-substrate sources; see Extra Info"
             else:
-                reason = "Prediction could not be made for any substrate"
+                reason = _failure_reason(items)
                 sources[reaction_position] = reason
                 failed_reactions[reaction_position] = reason
 
@@ -227,6 +227,21 @@ def reduce_substrate_predictions(
         extra_info=extra_info,
         failed_reactions=failed_reactions,
     )
+
+
+def _failure_reason(items: list[dict[str, Any]]) -> str:
+    """Return the distinct per-substrate error(s), or a generic fallback."""
+    unique: list[str] = []
+    for item in items:
+        error = item.get("error")
+        if not error:
+            continue
+        error = str(error).strip()
+        if error and error not in unique:
+            unique.append(error)
+    if unique:
+        return "; ".join(unique)
+    return "Prediction could not be made for any substrate"
 
 
 def _normalise_child_errors(errors: dict[int, str], child_count: int) -> dict[int, str]:

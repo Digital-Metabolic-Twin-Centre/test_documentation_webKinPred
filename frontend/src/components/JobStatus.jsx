@@ -388,7 +388,7 @@ function JobStatus() {
             const label = Array.isArray(rows) && rows.length > 0
               ? (rows.length === 1 ? `Row ${rows[0] + 1}` : `Rows ${rows.map(r => r + 1).join(', ')}`)
               : 'Some rows';
-            return `${label}: ${reason || 'Unknown reason'}`;
+            return `${reason || 'Unknown reason'} — ${label}`;
           }).join('\n');
         }
       } catch {}
