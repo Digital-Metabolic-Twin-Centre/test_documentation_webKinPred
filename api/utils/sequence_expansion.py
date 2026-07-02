@@ -253,6 +253,7 @@ def reduce_sequence_predictions(
         reaction_position: (start, end)
         for reaction_position, start, end in plan.sequence_plan.reaction_slices
     }
+    skipped_reactions = plan.sequence_plan.skipped_reactions
 
     consumed = 0
     for reaction_position, start, end in plan.reaction_slices:
@@ -300,6 +301,7 @@ def reduce_sequence_predictions(
                 selected_sequences=selected_sequences,
                 failed_reactions=failed_reactions,
                 sequence_items=sequence_items,
+                skipped_reactions=skipped_reactions,
             )
         else:
             _reduce_scalar(
@@ -312,6 +314,7 @@ def reduce_sequence_predictions(
                 selected_sequences=selected_sequences,
                 failed_reactions=failed_reactions,
                 sequence_items=sequence_items,
+                skipped_reactions=skipped_reactions,
             )
 
         if sequence_items:
@@ -407,6 +410,7 @@ def _reduce_scalar(
     selected_sequences: list[str],
     failed_reactions: dict[int, str],
     sequence_items: list[dict[str, Any]],
+    skipped_reactions: dict[int, str],
 ) -> None:
     selected_unit: int | None = None
     if successful:
@@ -416,7 +420,7 @@ def _reduce_scalar(
         sources[reaction_position] = selected_source
         selected_sequences[reaction_position] = unit.sequence
     else:
-        reason = _failure_reason(plan, reaction_position, sequence_items)
+        reason = _failure_reason(skipped_reactions, reaction_position, sequence_items)
         sources[reaction_position] = reason
         failed_reactions[reaction_position] = reason
 
@@ -434,6 +438,7 @@ def _reduce_per_substrate_slots(
     selected_sequences: list[str],
     failed_reactions: dict[int, str],
     sequence_items: list[dict[str, Any]],
+    skipped_reactions: dict[int, str],
 ) -> None:
     substrate_tokens = plan.substrate_tokens_by_reaction[reaction_position]
     values: list[float | None] = []
@@ -468,7 +473,7 @@ def _reduce_per_substrate_slots(
         else:
             sources[reaction_position] = "Mixed per-substrate sources; see Extra Info"
     else:
-        reason = _failure_reason(plan, reaction_position, sequence_items)
+        reason = _failure_reason(skipped_reactions, reaction_position, sequence_items)
         sources[reaction_position] = reason
         failed_reactions[reaction_position] = reason
 
@@ -513,11 +518,11 @@ def _mark_selected(
 
 
 def _failure_reason(
-    plan: TargetExpansionPlan,
+    skipped_reactions: dict[int, str],
     reaction_position: int,
     sequence_items: list[dict[str, Any]],
 ) -> str:
-    sequence_reason = plan.sequence_plan.skipped_reactions.get(reaction_position)
+    sequence_reason = skipped_reactions.get(reaction_position)
     if sequence_reason:
         return sequence_reason
     child_errors = _collect_child_errors(sequence_items)
