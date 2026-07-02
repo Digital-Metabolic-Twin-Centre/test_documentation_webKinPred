@@ -49,6 +49,7 @@ _log = logging.getLogger(__name__)
 # SQLite has a default limit of 999 host parameters per statement (older builds)
 # and many more on newer ones; 900 keeps batched ``IN`` lookups safe everywhere.
 _IN_CHUNK = 900
+_WRITE_CHUNK = 500
 
 # Field separator for hash inputs — a control char that cannot appear in SMILES,
 # method names, or hex digests, so distinct field tuples never collide.
@@ -373,20 +374,58 @@ def upsert_many(rows: Sequence[dict[str, Any]]) -> int:
         for row in normalised_rows.values()
     ]
     try:
-        PredictionStore.objects.bulk_create(
-            objects,
-            update_conflicts=True,
-            unique_fields=["lookup_key"],
-            update_fields=["value", "failure_reason", "updated_at"],
-        )
-    except Exception:
+        _bulk_upsert_prediction_objects(PredictionStore, objects)
+    except Exception as exc:
         _log.warning(
-            "ReconXKG prediction cache write failed; results still returned",
+            "ReconXKG prediction cache bulk write failed; retrying in smaller batches",
             extra={"event": "recon_xkg.cache_write_failed", "rows": len(objects)},
             exc_info=True,
         )
-        return 0
+        written, failed = _fallback_upsert_prediction_objects(PredictionStore, objects)
+        if failed:
+            _log.warning(
+                "ReconXKG prediction cache fallback write skipped some rows",
+                extra={
+                    "event": "recon_xkg.cache_write_fallback_incomplete",
+                    "rows": len(objects),
+                    "written": written,
+                    "failed": failed,
+                    "exception_type": type(exc).__name__,
+                },
+            )
+        return written
     return len(objects)
+
+
+def _bulk_upsert_prediction_objects(model: Any, objects: Sequence[Any]) -> None:
+    model.objects.bulk_create(
+        objects,
+        update_conflicts=True,
+        unique_fields=["lookup_key"],
+        update_fields=["value", "failure_reason", "updated_at"],
+    )
+
+
+def _fallback_upsert_prediction_objects(
+    model: Any,
+    objects: Sequence[Any],
+) -> tuple[int, int]:
+    written = 0
+    failed = 0
+    for start in range(0, len(objects), _WRITE_CHUNK):
+        chunk = list(objects[start : start + _WRITE_CHUNK])
+        try:
+            _bulk_upsert_prediction_objects(model, chunk)
+        except Exception:
+            for obj in chunk:
+                try:
+                    _bulk_upsert_prediction_objects(model, [obj])
+                    written += 1
+                except Exception:
+                    failed += 1
+        else:
+            written += len(chunk)
+    return written, failed
 
 
 # ---------------------------------------------------------------------------

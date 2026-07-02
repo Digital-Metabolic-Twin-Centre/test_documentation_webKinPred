@@ -1521,6 +1521,9 @@ def _invoke_method_prediction_cached(
         )
 
         rows_to_store: list[dict[str, Any]] = []
+        numeric_rows_to_store = 0
+        failure_rows_to_store = 0
+        uncacheable_misses = 0
         for local_index, global_index in enumerate(miss_indices):
             predictions[global_index] = miss_preds[local_index]
             key = keys[global_index]
@@ -1548,8 +1551,12 @@ def _invoke_method_prediction_cached(
                             "failure_reason": reason,
                         }
                     )
+                    failure_rows_to_store += 1
+                else:
+                    uncacheable_misses += 1
                 continue
             if not key or component is None:
+                uncacheable_misses += 1
                 continue  # uncacheable unit — never written back
             value = store.coerce_value(miss_preds[local_index])
             if value is None:
@@ -1569,6 +1576,7 @@ def _invoke_method_prediction_cached(
                     }
                 )
                 invalid[global_index] = "Prediction could not be made"
+                failure_rows_to_store += 1
                 continue
             seq_sha, sub_canon, products_canon = component
             rows_to_store.append(
@@ -1585,7 +1593,39 @@ def _invoke_method_prediction_cached(
                     "failure_reason": "",
                 }
             )
-        store.upsert_many(rows_to_store)
+            numeric_rows_to_store += 1
+        rows_written = store.upsert_many(rows_to_store)
+        unique_rows_prepared = len({row["lookup_key"] for row in rows_to_store})
+        _log.info(
+            "ReconXKG prediction cache write summary",
+            extra={
+                "event": "recon_xkg.cache_write_summary",
+                "job_public_id": public_id,
+                "method_key": desc.key,
+                "target": target,
+                "units": n,
+                "hits": hit_count,
+                "misses": len(miss_indices),
+                "rows_prepared": len(rows_to_store),
+                "unique_rows_prepared": unique_rows_prepared,
+                "rows_written": rows_written,
+                "numeric_rows": numeric_rows_to_store,
+                "failure_rows": failure_rows_to_store,
+                "uncacheable_misses": uncacheable_misses,
+            },
+        )
+        if rows_written < unique_rows_prepared:
+            _log.warning(
+                "ReconXKG prediction cache write stored fewer rows than prepared",
+                extra={
+                    "event": "recon_xkg.cache_write_incomplete",
+                    "job_public_id": public_id,
+                    "method_key": desc.key,
+                    "target": target,
+                    "unique_rows_prepared": unique_rows_prepared,
+                    "rows_written": rows_written,
+                },
+            )
 
     if cache_stats is not None:
         cache_stats["hits"] += hit_count
