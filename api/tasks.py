@@ -382,11 +382,31 @@ def run_recon_xkg_cache_prediction(
         return
 
     try:
+        _log.info(
+            "ReconXKG cache task started",
+            extra={
+                "event": "recon_xkg.cache_task_started",
+                "job_public_id": public_id,
+                "targets": targets,
+                "methods": methods,
+            },
+        )
         ordered_targets = canonicalise_targets(targets)
         descriptors = {
             target: get_method(methods[target]) for target in ordered_targets
         }
+        load_started = time.monotonic()
         dataframe = _load_recon_xkg_preflight_dataframe(public_id)
+        _log.info(
+            "ReconXKG preflight input loaded",
+            extra={
+                "event": "recon_xkg.preflight_input_loaded",
+                "job_public_id": public_id,
+                "rows": len(dataframe),
+                "columns": len(dataframe.columns),
+                "elapsed_ms": round((time.monotonic() - load_started) * 1000, 2),
+            },
+        )
         preflight = preflight_recon_xkg_cache(
             dataframe=dataframe,
             targets=ordered_targets,
@@ -605,9 +625,33 @@ def execute_multi_prediction_job(
         total_predictions=0,
     )
     job.refresh_from_db()
+    progress_started = time.monotonic()
     initialise_job_progress_stages(job, ordered_targets, desc_by_target)
+    _log.info(
+        "Prediction progress stages initialised",
+        extra={
+            "event": "prediction.progress_initialised",
+            "job_public_id": public_id,
+            "targets": ordered_targets,
+            "cache_only": cache_only,
+            "elapsed_ms": round((time.monotonic() - progress_started) * 1000, 2),
+        },
+    )
 
+    load_started = time.monotonic()
     df = _load_input(job)
+    _log.info(
+        "Prediction input loaded",
+        extra={
+            "event": "prediction.input_loaded",
+            "job_public_id": public_id,
+            "rows": len(df),
+            "columns": len(df.columns),
+            "cache_only": cache_only,
+            "elapsed_ms": round((time.monotonic() - load_started) * 1000, 2),
+        },
+    )
+    execute_started = time.monotonic()
     deferred_refund = _execute_multi_prediction(
         job=job,
         targets=ordered_targets,
@@ -622,6 +666,15 @@ def execute_multi_prediction_job(
         similarity_cache_snapshot=similarity_cache_snapshot,
         cache_only=cache_only,
         defer_quota_refund=cache_only,
+    )
+    _log.info(
+        "Prediction execution completed",
+        extra={
+            "event": "prediction.execution_completed",
+            "job_public_id": public_id,
+            "cache_only": cache_only,
+            "elapsed_ms": round((time.monotonic() - execute_started) * 1000, 2),
+        },
     )
     if deferred_refund and cache_only:
         credit_back(_job_quota_subject(job), deferred_refund)
@@ -659,6 +712,7 @@ def _execute_multi_prediction(
     cache_stats: dict[str, int] | None = (
         {"hits": 0, "misses": 0, "units": 0} if recon_xkg else None
     )
+    sequence_plan_started = time.monotonic()
     sequence_plan = build_sequence_batch_plan(
         df,
         desc_by_target.values(),
@@ -671,6 +725,19 @@ def _execute_multi_prediction(
     sequence_skips = dict(sequence_plan.skipped_reactions)
     reported_skips = dict(sequence_skips)
     target_results: dict[str, dict[str, Any]] = {}
+    _log.info(
+        "Prediction sequence planning completed",
+        extra={
+            "event": "prediction.sequence_plan",
+            "job_public_id": job.public_id,
+            "rows": n_rows,
+            "valid_reactions": len(valid_idx),
+            "sequence_children": len(sequence_plan.expansion.children),
+            "recon_xkg": recon_xkg,
+            "cache_only": cache_only,
+            "elapsed_ms": round((time.monotonic() - sequence_plan_started) * 1000, 2),
+        },
+    )
 
     eitlem_targets = [target for target in targets if desc_by_target[target].key == "EITLEM"]
     last_eitlem_target = eitlem_targets[-1] if eitlem_targets else None
@@ -693,6 +760,7 @@ def _execute_multi_prediction(
             extra_call_kwargs["cleanup_embeddings_after_run"] = target == last_omniesi_target
 
         try:
+            target_started = time.monotonic()
             result = _execute_target_batch(
                 job=job,
                 desc=desc,
@@ -710,6 +778,19 @@ def _execute_multi_prediction(
                 cache_stats=cache_stats,
                 prediction_cache_snapshot=prediction_cache_snapshot,
                 cache_only=cache_only,
+            )
+            _log.info(
+                "Prediction target execution completed",
+                extra={
+                    "event": "prediction.target_completed",
+                    "job_public_id": job.public_id,
+                    "target": target,
+                    "method_key": desc.key,
+                    "recon_xkg": recon_xkg,
+                    "cache_only": cache_only,
+                    "failed_reactions": len(result["failed_reactions"]),
+                    "elapsed_ms": round((time.monotonic() - target_started) * 1000, 2),
+                },
             )
         except Exception as exc:
             mark_stage_failed(job.public_id, target, desc.key, message=str(exc))
@@ -742,9 +823,23 @@ def _execute_multi_prediction(
         preferred_cols + [column for column in results_df.columns if column not in preferred_cols]
     ]
     out_path = _output_path(job.public_id)
+    write_started = time.monotonic()
     results_df.to_csv(out_path, index=False)
+    _log.info(
+        "Prediction output CSV written",
+        extra={
+            "event": "prediction.output_csv_written",
+            "job_public_id": job.public_id,
+            "rows": len(results_df),
+            "columns": len(results_df.columns),
+            "recon_xkg": recon_xkg,
+            "cache_only": cache_only,
+            "elapsed_ms": round((time.monotonic() - write_started) * 1000, 2),
+        },
+    )
     if include_similarity_columns and "kcat" in targets:
         selected_sequences = target_results.get("kcat", {}).get("selected_sequences")
+        similarity_started = time.monotonic()
         append_kcat_similarity_columns_to_output_csv(
             out_path,
             desc_by_target["kcat"].key,
@@ -752,6 +847,17 @@ def _execute_multi_prediction(
             cached_similarity_snapshot=similarity_cache_snapshot,
             cache_only=cache_only,
             selected_sequences_by_row=selected_sequences,
+        )
+        _log.info(
+            "Prediction similarity columns appended",
+            extra={
+                "event": "prediction.similarity_columns_appended",
+                "job_public_id": job.public_id,
+                "method_key": desc_by_target["kcat"].key,
+                "recon_xkg": recon_xkg,
+                "cache_only": cache_only,
+                "elapsed_ms": round((time.monotonic() - similarity_started) * 1000, 2),
+            },
         )
 
     if cache_stats is not None:
@@ -1455,17 +1561,47 @@ def _invoke_method_prediction_cached(
 
     n = len(sequences)
     model_version = getattr(desc, "model_version", "1")
+    key_started = time.monotonic()
     keys, components, params_fp = _recon_xkg_unit_keys(
         desc, target, sequences, call_kwargs, canonicalize_substrates
     )
+    _log.info(
+        "ReconXKG prediction cache keys built",
+        extra={
+            "event": "recon_xkg.cache_keys_built",
+            "job_public_id": public_id,
+            "method_key": desc.key,
+            "target": target,
+            "units": n,
+            "keyed_units": sum(1 for key in keys if key),
+            "cache_only": cache_only,
+            "elapsed_ms": round((time.monotonic() - key_started) * 1000, 2),
+        },
+    )
 
+    read_started = time.monotonic()
     if cache_only:
         cached = cache_snapshot or {}
     elif cache_snapshot is not None:
         cached = cache_snapshot
     else:
         cached = store.get_many([key for key in keys if key])
+    _log.info(
+        "ReconXKG prediction cache source loaded",
+        extra={
+            "event": "recon_xkg.cache_source_loaded",
+            "job_public_id": public_id,
+            "method_key": desc.key,
+            "target": target,
+            "units": n,
+            "cached_values": len(cached),
+            "cache_only": cache_only,
+            "source": "snapshot" if cache_only or cache_snapshot is not None else "store",
+            "elapsed_ms": round((time.monotonic() - read_started) * 1000, 2),
+        },
+    )
 
+    scan_started = time.monotonic()
     predictions: list[Any] = [None] * n
     invalid: dict[int, str] = {}
     miss_indices: list[int] = []
@@ -1480,6 +1616,21 @@ def _invoke_method_prediction_cached(
             invalid[i] = outcome.reason
         else:
             predictions[i] = store.coerce_value(outcome)
+    _log.info(
+        "ReconXKG prediction cache outcomes scanned",
+        extra={
+            "event": "recon_xkg.cache_outcomes_scanned",
+            "job_public_id": public_id,
+            "method_key": desc.key,
+            "target": target,
+            "units": n,
+            "hits": hit_count,
+            "misses": len(miss_indices),
+            "invalid_hits": len(invalid),
+            "cache_only": cache_only,
+            "elapsed_ms": round((time.monotonic() - scan_started) * 1000, 2),
+        },
+    )
 
     if cache_only and miss_indices:
         raise ReconXkgCacheOnlyMiss(

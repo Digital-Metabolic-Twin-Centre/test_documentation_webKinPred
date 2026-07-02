@@ -59,13 +59,26 @@ def preflight_recon_xkg_cache(
     reason = "cache-read-error"
 
     try:
+        plan_started = time.monotonic()
         sequence_plan = build_sequence_batch_plan(
             dataframe,
             descriptors.values(),
             handle_long_sequences,
         )
+        _log.info(
+            "ReconXKG preflight sequence planning completed",
+            extra={
+                "event": "recon_xkg.preflight_sequence_plan",
+                "job_public_id": job_public_id,
+                "rows": len(dataframe),
+                "valid_reactions": len(sequence_plan.valid_reaction_indices),
+                "sequence_children": len(sequence_plan.expansion.children),
+                "elapsed_ms": round((time.monotonic() - plan_started) * 1000, 2),
+            },
+        )
         target_batches: dict[str, Any] = {}
         target_keys: dict[str, list[str | None]] = {}
+        key_started = time.monotonic()
         for target in targets:
             descriptor = descriptors[target]
             batch = build_target_batch_plan(
@@ -98,7 +111,28 @@ def preflight_recon_xkg_cache(
                     started,
                 )
 
+        _log.info(
+            "ReconXKG preflight key planning completed",
+            extra={
+                "event": "recon_xkg.preflight_key_plan",
+                "job_public_id": job_public_id,
+                "prediction_units": prediction_units,
+                "unique_prediction_keys": len(unique_keys),
+                "elapsed_ms": round((time.monotonic() - key_started) * 1000, 2),
+            },
+        )
+        read_started = time.monotonic()
         prediction_values = prediction_store.get_many(unique_keys)
+        _log.info(
+            "ReconXKG preflight prediction cache read completed",
+            extra={
+                "event": "recon_xkg.preflight_prediction_read",
+                "job_public_id": job_public_id,
+                "requested_keys": len(unique_keys),
+                "cache_hits": len(prediction_values),
+                "elapsed_ms": round((time.monotonic() - read_started) * 1000, 2),
+            },
+        )
         if any(
             key not in prediction_values
             or not prediction_store.cached_outcome_is_valid(prediction_values[key])
@@ -144,9 +178,20 @@ def preflight_recon_xkg_cache(
                 sequence: prediction_store.sha256_text(sequence)
                 for sequence in unique_sequences
             }
+            similarity_started = time.monotonic()
             similarity_values = prediction_store.get_similarity_many(
                 sequence_hashes,
                 cache_label,
+            )
+            _log.info(
+                "ReconXKG preflight similarity cache read completed",
+                extra={
+                    "event": "recon_xkg.preflight_similarity_read",
+                    "job_public_id": job_public_id,
+                    "requested_sequences": len(unique_sequences),
+                    "cache_hits": len(similarity_values),
+                    "elapsed_ms": round((time.monotonic() - similarity_started) * 1000, 2),
+                },
             )
             if any(
                 sequence not in similarity_values
