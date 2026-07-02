@@ -249,10 +249,18 @@ def reduce_sequence_predictions(
     extra_info: list[str] = [""] * reaction_count
     selected_sequences: list[str] = [""] * reaction_count
     failed_reactions: dict[int, str] = {}
+    sequence_slice_by_reaction = {
+        reaction_position: (start, end)
+        for reaction_position, start, end in plan.sequence_plan.reaction_slices
+    }
 
     consumed = 0
     for reaction_position, start, end in plan.reaction_slices:
-        sequence_items = _initial_sequence_items(plan, reaction_position)
+        sequence_items = _initial_sequence_items(
+            plan,
+            reaction_position,
+            sequence_slice_by_reaction,
+        )
         successful: list[tuple[int, float, str]] = []
 
         for unit_index in range(start, end):
@@ -330,25 +338,27 @@ def reduce_sequence_predictions(
 def _initial_sequence_items(
     plan: TargetExpansionPlan,
     reaction_position: int,
+    sequence_slice_by_reaction: dict[int, tuple[int, int]],
 ) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
-    for row_position, start, end in plan.sequence_plan.reaction_slices:
-        if row_position != reaction_position:
+    start_end = sequence_slice_by_reaction.get(reaction_position)
+    if start_end is None:
+        return items
+
+    start, end = start_end
+    for sequence_child_index in range(start, end):
+        child = plan.sequence_plan.children[sequence_child_index]
+        if not child.skip_reason:
             continue
-        for sequence_child_index in range(start, end):
-            child = plan.sequence_plan.children[sequence_child_index]
-            if not child.skip_reason:
-                continue
-            items.append(
-                {
-                    "sequenceIndex": child.sequence_position + 1,
-                    "sequence": child.sequence,
-                    "prediction": None,
-                    "source": "",
-                    "error": child.skip_reason,
-                }
-            )
-        break
+        items.append(
+            {
+                "sequenceIndex": child.sequence_position + 1,
+                "sequence": child.sequence,
+                "prediction": None,
+                "source": "",
+                "error": child.skip_reason,
+            }
+        )
     return items
 
 
