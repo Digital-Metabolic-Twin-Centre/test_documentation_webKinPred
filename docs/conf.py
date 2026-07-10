@@ -29,26 +29,37 @@ html_theme_options = {
 }
 html_show_sphinx = False
 
+suppress_warnings = [
+    "autoapi",
+]
+
 autoapi_dirs = [
     "../api",
     "../webKinPred",
     "../db_models",
     "../tools/seqmap",
 ]
-autoapi_add_toctree_entry = False
+autoapi_add_toctree_entry = True
 autoapi_options = [
-    "members",
-    "undoc-members",
-    "show-inheritance",
 ]
 autoapi_ignore = [
     "*/__pycache__/*",
     "*/migrations/*",
     "*/tests/*",
     "../api/tests/*",
+    "../api/models.py",
+    "../api/urls.py",
+    "../api/urls_v1.py",
+    "../api/views/v1_views.py",
+    "../api/prediction_engines/generic_subprocess.py",
+    "../api/utils/api_auth.py",
+    "../api/utils/convert_to_mol.py",
+    "../api/utils/validation_utils.py",
     "../tests/*",
     "../tools/memory_tests/*",
     "../tools/gpu_embed_service/*",
+    "../tools/seqmap/test_*",
+    "../tools/seqmap/utils/migrate_json_to_sqlite.py",
 ]
 
 

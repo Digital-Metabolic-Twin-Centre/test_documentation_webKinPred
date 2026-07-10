@@ -113,37 +113,37 @@ Common LogQL Queries
 
 All logs for a job:
 
-.. code:: logql
+.. code:: text
 
    {service="celery"} | json | job_public_id="mReUVED"
 
 All logs for a Celery task:
 
-.. code:: logql
+.. code:: text
 
    {service="celery"} | json | celery_task_id="f4007945-92fe-41c0-9229-127304d14e9d"
 
 Method failures:
 
-.. code:: logql
+.. code:: text
 
    {service="celery"} | json | level="ERROR" | method_key="EITLEM"
 
 Subprocess output warnings/errors:
 
-.. code:: logql
+.. code:: text
 
    {service="celery", event="subprocess.stderr_line"} | json
 
 Completed subprocess durations:
 
-.. code:: logql
+.. code:: text
 
    {service="celery", event="subprocess.completed"} | json | unwrap duration_ms
 
 Backend request errors:
 
-.. code:: logql
+.. code:: text
 
    {service="backend"} | json | level="ERROR"
 
