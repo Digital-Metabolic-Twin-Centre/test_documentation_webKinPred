@@ -4,8 +4,6 @@ MMseqs Similarity Datasets Guide
 Use this guide if your method needs sequence-similarity validation
 (``runSimilarity=true``).
 
-.. _1-if-your-training-dataset-already-matches-an-existing-dataset:
-
 1. If Your Training Dataset Already Matches an Existing Dataset
 ---------------------------------------------------------------
 
@@ -17,14 +15,11 @@ Just reuse the existing dataset and update its label in:
 
 Example:
 
-- If your method uses the same training set as DLKcat, change:
-
-  - ``"DLKcat/UniKP"`` -> ``"DLKcat/UniKP/YourMethod"``
+- If your method uses the same training set as DLKcat, change
+  ``"DLKcat/UniKP"`` to ``"DLKcat/UniKP/YourMethod"``.
 
 This makes your method visible under that same similarity dataset option
 without duplicating databases.
-
-.. _2-if-you-need-a-new-dataset:
 
 2. If You Need a New Dataset
 ----------------------------

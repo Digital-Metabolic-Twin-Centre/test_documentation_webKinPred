@@ -5,4 +5,4 @@
 # in this directory that declares a `descriptor` object of type MethodDescriptor.
 # The registry auto-discovers and loads all descriptors at startup.
 #
-# To add a new prediction method, see docs/CONTRIBUTING.md.
+# To add a new prediction method, see docs/project/contributing.rst.

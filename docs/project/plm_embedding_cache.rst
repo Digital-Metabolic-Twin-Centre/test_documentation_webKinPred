@@ -4,8 +4,6 @@ PLM Embedding Cache and Remote GPU Offload
 Use this guide when your method depends on protein language model
 embeddings.
 
-.. _1-purpose:
-
 1. Purpose
 ----------
 
@@ -19,12 +17,8 @@ The system already supports this with:
 - remote GPU precompute with local fail-open fallback
 - file-level embedding progress tracking through inotify
 
-.. _2-core-concepts:
-
 2. Core concepts
 ----------------
-
-.. _21-seq_id-is-the-cache-key:
 
 2.1 ``seq_id`` is the cache key
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -32,8 +26,6 @@ The system already supports this with:
 - The cache key is ``seq_id``, not raw sequence text.
 - ``seq_id`` is shared across methods.
 - One cached artefact can serve many jobs and many methods.
-
-.. _22-planner-is-sparse:
 
 2.2 Planner is sparse
 ~~~~~~~~~~~~~~~~~~~~~
@@ -47,8 +39,6 @@ The system already supports this with:
 
 Only missing work is sent to the GPU service.
 
-.. _23-prediction-and-embedding-are-separate-stages:
-
 2.3 Prediction and embedding are separate stages
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -57,14 +47,10 @@ Only missing work is sent to the GPU service.
 - If GPU precompute fails, local prediction continues and computes
   missing artefacts.
 
-.. _3-current-method-by-method-behaviour:
-
 3. Current method-by-method behaviour
 -------------------------------------
 
 This section reflects the current code paths.
-
-.. _31-kinform-h-and-kinform-l:
 
 3.1 KinForm-H and KinForm-L
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -97,8 +83,6 @@ KinForm rule:
 - A sequence enters this step if binding sites are missing, ProtT5 files
   are missing, or both.
 
-.. _32-catapro:
-
 3.2 CataPro
 ~~~~~~~~~~~
 
@@ -113,8 +97,6 @@ Cache artefact:
 
 - ``media/sequence_info/prot_t5_last/mean_vecs/{seq_id}.npy``
 
-.. _33-unikp:
-
 3.3 UniKP
 ~~~~~~~~~
 
@@ -128,8 +110,6 @@ Cache artefact:
 
 - ``media/sequence_info/prot_t5_last/mean_vecs/{seq_id}.npy``
 
-.. _34-turnup:
-
 3.4 TurNup
 ~~~~~~~~~~
 
@@ -142,8 +122,6 @@ Engine and planner:
 Cache artefact:
 
 - ``media/sequence_info/esm1b_turnup/{seq_id}.npy``
-
-.. _35-catpred:
 
 3.5 CatPred
 ~~~~~~~~~~~
@@ -169,8 +147,6 @@ GPU steps:
 CatPred uses a deterministic reduction path. The cached ``.pt`` file is
 the checkpoint specific pooled tensor.
 
-.. _36-eitlem:
-
 3.6 EITLEM
 ~~~~~~~~~~
 
@@ -190,8 +166,6 @@ Also present in the repo:
 - ``models/EITLEM/Code/eitlem_prediction_script.py``
 - This script shows the preferred full-matrix ephemeral cleanup pattern.
 - It removes touched ``esm1v`` files after prediction.
-
-.. _37-omniesi:
 
 3.7 OmniESI
 ~~~~~~~~~~~
@@ -217,8 +191,6 @@ deletes these files after the run, matching EITLEM's ephemeral ``esm1v``
 behaviour. This is intentionally separate from CatPred's
 checkpoint-specific pooled ESM2 cache.
 
-.. _38-realkcat:
-
 3.8 RealKcat
 ~~~~~~~~~~~~
 
@@ -240,8 +212,6 @@ GPU step:
 RealKcat uses a persistent ESM2 layer-33 mean-vector cache keyed by
 ``seq_id``. Files are reused across runs and are not deleted after
 prediction.
-
-.. _39-iecata:
 
 3.9 IECata
 ~~~~~~~~~~
@@ -265,8 +235,6 @@ IECata stages full ProtT5 per-residue tensors as ephemeral files.
 Prediction consumes these files and removes touched artefacts after the
 run.
 
-.. _310-mmisa-km:
-
 3.10 MMISA-KM
 ~~~~~~~~~~~~~
 
@@ -275,13 +243,11 @@ eligible in the shared embedding system.
 
 It uses a method-local contact-map cache:
 
-- ``MMISA_KM_CACHE_DIR`` → ``media/sequence_info/mmisa_km_contacts/``
+- ``MMISA_KM_CACHE_DIR`` -> ``media/sequence_info/mmisa_km_contacts/``
 
 The generic subprocess engine skips shared embedding planning and
 progress tracking for MMISA-KM because its descriptor has
 ``embeddings_used=[]``.
-
-.. _4-planner-contract:
 
 4. Planner contract
 -------------------
@@ -309,8 +275,6 @@ Key planner functions to update for new work:
 - ``_profile_for_method``
 - ``expected_paths_by_seq``
 - ``_step_plans_for_profile``
-
-.. _5-backend-orchestration-contract:
 
 5. Backend orchestration contract
 ---------------------------------
@@ -340,8 +304,6 @@ Fallback behaviour:
 - Default is fail-open.
 - Local prediction continues on failure or unreachable GPU.
 - Set ``GPU_EMBED_FAIL_CLOSED=1`` only if fail-fast is required.
-
-.. _6-gpu-service-api-contract:
 
 6. GPU service API contract
 ---------------------------
@@ -387,8 +349,6 @@ Health payload includes:
 - ``active_jobs``
 - ``queued_jobs``
 
-.. _7-step-runner-contract:
-
 7. Step runner contract
 -----------------------
 
@@ -417,8 +377,6 @@ Deprecated keys kept for compatibility:
 
 Do not add new features on deprecated keys.
 
-.. _8-progress-tracking:
-
 8. Progress tracking
 --------------------
 
@@ -438,8 +396,6 @@ UI impact:
 
 - UI receives embedding progress without direct GPU progress streaming.
 - Remote writes through shared storage still update UI progress.
-
-.. _9-contributor-playbook:
 
 9. Contributor playbook
 -----------------------
@@ -498,8 +454,6 @@ Existing PLM caches:
 - ``iecata_prot_t5_residues/{seq_id}.npy``: IECata ephemeral full ProtT5
   per-residue embedding tensor.
 
-.. _91-reuse-an-existing-embedding-family:
-
 9.1 Reuse an existing embedding family
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -514,8 +468,6 @@ Existing PLM caches:
 
 6. Add tests for cache hit, partial miss, and full miss.
 
-.. _92-add-a-new-embedding-family:
-
 9.2 Add a new embedding family
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -527,8 +479,6 @@ Existing PLM caches:
 6. Add optional command override in ``gpu_service.env``.
 7. Pass required env paths into prediction subprocess env.
 8. Add planner, orchestration, and API tests.
-
-.. _10-full-matrix-policy:
 
 10. Full matrix policy
 ----------------------
@@ -555,8 +505,6 @@ Full matrix pattern:
 - EITLEM is the reference pattern in
   ``models/EITLEM/Code/eitlem_prediction_script.py``.
 
-.. _11-tests-to-add:
-
 11. Tests to add
 ----------------
 
@@ -577,8 +525,6 @@ API tests:
 
 - ``/api/v1/gpu/status/`` for configured and unconfigured cases
 - status payload includes ``gpuPrecompute`` events
-
-.. _12-operations-and-configuration:
 
 12. Operations and configuration
 --------------------------------

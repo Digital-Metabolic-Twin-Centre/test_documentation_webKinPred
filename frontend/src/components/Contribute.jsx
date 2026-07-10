@@ -2,7 +2,7 @@ import React from 'react';
 import './ApiDocs/ApiDocs.css';
 
 const CONTRIBUTING_URL =
-  'https://github.com/openKinetics/webKinPred/blob/master/docs/CONTRIBUTING.md';
+  'https://github.com/openKinetics/webKinPred/blob/master/docs/project/contributing.rst';
 
 export default function Contribute() {
   return (

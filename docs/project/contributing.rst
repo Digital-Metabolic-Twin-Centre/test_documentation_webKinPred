@@ -4,8 +4,6 @@ Contributing a New Prediction Method
 | Start with the ``MethodDescriptor``.
 | It is the contract between your method and the rest of the platform.
 
-.. _1-define-the-descriptor-first:
-
 1. Define the Descriptor First
 ------------------------------
 
@@ -27,6 +25,7 @@ behind it.
 
        supports=["kcat"],                 # e.g. ["kcat"], ["Km"], ["kcat/Km"], or combinations
        input_format="single",             # backend contract: "single" or "multi"
+       # input_behavior_by_target={"kcat": "native_multi"},  # rare target override
        output_cols={"kcat": "kcat (1/s)"},
        max_seq_len=1024,
 
@@ -47,17 +46,22 @@ What these fields mean
 - ``input_format``: backend CSV column contract expected by the method.
   Descriptors use ``single`` for the ``Substrate`` column contract and
   ``multi`` for the full-reaction ``Substrates`` + ``Products``
-  contract. User-facing docs should describe the three CSV formats:
-  ``single``, ``multi`` (dot-joined co-substrates in ``Substrate``), and
-  ``full reaction`` (``Substrates`` + ``Products``).
+  contract. The orchestration layer automatically expands
+  semicolon-separated ``Substrates`` values for every ``single``
+  descriptor, so predictor integrations should continue declaring only
+  their native one-substrate contract.
+- ``input_behavior_by_target``: override the default only when a target
+  consumes list input natively. CatPred declares ``native_multi`` for
+  kcat and ``expanded_pair`` for Km; TurNup inherits
+  ``native_full_reaction`` from its full-reaction descriptor. Keep
+  target-specific behavior here instead of adding method-name branches
+  to orchestration or UI code.
 - ``col_to_kwarg``: maps CSV columns to kwargs passed into your method
   runtime.
 - ``target_kwargs``: per-target switches (for shared kcat/Km scripts).
 - ``subprocess`` or ``pred_func``: set exactly one. Use ``subprocess``
   by default. Use ``pred_func`` only when the shared subprocess engine
   cannot support your runtime flow.
-
-.. _2-implement-your-methods-predictor:
 
 2. Implement Your Method's Predictor
 ------------------------------------
@@ -67,15 +71,13 @@ Use this decision rule:
 1. Use the shared subprocess engine by default.
 2. Use a custom engine only when required by method-specific behaviour.
 
-Source code of your method should be added to "models/YourMethod/" (this
+Source code of your method should be added to ``models/YourMethod/`` (this
 can be a Git submodule).
 
 General batching best practice:
 
 - Batching is fine, but keep batch sizes realistic to avoid RAM spikes
   (generally no more than 32-64 rows/sequences per batch).
-
-.. _path-1-script--shared-engine-default:
 
 Path 1: Script + Shared Engine (default)
 ----------------------------------------
@@ -84,16 +86,16 @@ Use this if your model can run as one subprocess call.
 
 You write:
 
-- One prediction script
-- ``subprocess=SubprocessEngineConfig(...)`` in descriptor
+- One prediction script.
+- ``subprocess=SubprocessEngineConfig(...)`` in the descriptor.
 
 The shared engine handles:
 
-- Row validation (sequence + substrate/product chemistry)
-- Temporary input/output files
-- Subprocess execution
-- Progress parsing (``Progress: x/y``)
-- Output parsing and row mapping
+- Row validation (sequence and substrate/product chemistry).
+- Temporary input/output files.
+- Subprocess execution.
+- Progress parsing (``Progress: x/y``).
+- Output parsing and row mapping.
 
 Your script must support:
 
@@ -137,9 +139,9 @@ Rules:
 - Emit prediction progress as ``Progress: x/y`` on stdout if the script
   can report it. The platform parses those lines for frontend progress
   and separately writes structured infrastructure logs.
-- Do not add bare ``print()`` calls in ``api/`` runtime code. Use Python
-  logging with a stable ``event`` key in ``extra``, and keep user-facing
-  validation/session text on ``push_line()``.
+- Do not add bare ``print()`` calls in ``api/`` runtime code. Use
+  Python logging with a stable ``event`` key in ``extra``, and keep
+  user-facing validation/session text on ``push_line()``.
 
 Path config example:
 
@@ -151,8 +153,6 @@ Path config example:
        data_path_env={"YOUR_METHOD_DATA": "YourMethod"},
    )
 
-.. _path-2-script--custom-engine-only-when-required:
-
 Path 2: Script + Custom Engine (only when required)
 ---------------------------------------------------
 
@@ -160,15 +160,15 @@ Use this if you need custom behavior not covered by the shared engine.
 
 Examples:
 
-- Special validation rules
-- Non-standard file contracts
-- Multi-stage orchestration
-- Extra Python-side preprocessing/caching
+- Special validation rules.
+- Non-standard file contracts.
+- Multi-stage orchestration.
+- Extra Python-side preprocessing/caching.
 
 You write:
 
-- ``api/prediction_engines/your_method.py``
-- ``pred_func=your_method_predictions`` in descriptor
+- ``api/prediction_engines/your_method.py``.
+- ``pred_func=your_method_predictions`` in the descriptor.
 
 Expected engine signature:
 
@@ -183,18 +183,16 @@ Expected engine signature:
 
 Return:
 
-- ``predictions``: one value per input row
+- ``predictions``: one value per input row.
 - ``invalid_indices``: one of:
 
-  - ``list[int]`` of failed row indices relative to input list
-  - ``dict[int, str]`` mapping failed row indices to clear reasons
+  - ``list[int]`` of failed row indices relative to input list.
+  - ``dict[int, str]`` mapping failed row indices to clear reasons.
 
 Recommendation:
 
 - Return ``dict[int, str]`` for richer user feedback in job output and
   progress views.
-
-.. _3-register-runtime-paths:
 
 3. Register Runtime Paths
 -------------------------
@@ -218,7 +216,7 @@ by BuildKit. Add two things:
 
 .. code:: dockerfile
 
-   # ── YourMethod ────────────────────────────────────────────────────────────────
+   # -- YourMethod ---------------------------------------------------------------
    FROM base AS env-your_method
    COPY docker-requirements/your_method_requirements.txt ./docker-requirements/
    RUN --mount=type=cache,target=/opt/conda/pkgs,sharing=locked \
@@ -226,7 +224,7 @@ by BuildKit. Add two things:
        mamba create -n your_method_env python=3.10 -c conda-forge -y \
        && conda run -n your_method_env pip install -r docker-requirements/your_method_requirements.txt
 
-If your method needs extra conda packages (e.g. RDKit, XGBoost), install
+If your method needs extra conda packages (for example RDKit or XGBoost), install
 them before ``pip install`` (see ``env-dlkcat`` and ``env-turnup``
 stages for examples).
 
@@ -252,8 +250,6 @@ other env copies):
 If your method can reuse an existing env, skip steps 1-2 and only add
 the config keys.
 
-.. _4-plm-embeddings-optional:
-
 4. PLM Embeddings (Optional)
 ----------------------------
 
@@ -268,9 +264,7 @@ falls back to local compute.
 
 Read the full guide:
 
-- `PLM_EMBEDDING_CACHE.md <PLM_EMBEDDING_CACHE.md>`__
-
-.. _5-add-mmseqs-similarity-dataset-optional:
+- :doc:`plm_embedding_cache`
 
 5. Add MMseqs Similarity Dataset (Optional)
 -------------------------------------------
@@ -278,7 +272,7 @@ Read the full guide:
 If you want to include your method's training data in the
 sequence-similarity validation, read:
 
-- `MMSEQS_SIMILARITY_DATASETS.md <MMSEQS_SIMILARITY_DATASETS.md>`__
+- :doc:`mmseqs_similarity_datasets`
 
 This includes:
 
@@ -287,8 +281,6 @@ This includes:
 - adding a new FASTA + DB dataset
 - setting ``method_keys`` in each dataset entry so backend method
   mapping works
-
-.. _6-test-your-integration-end-to-end:
 
 6. Test Your Integration End-to-End
 -----------------------------------

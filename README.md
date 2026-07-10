@@ -15,7 +15,7 @@
 
 [Live Demo](https://predictor.openkinetics.org/) ·
 [API Docs](https://predictor.openkinetics.org/api-docs) ·
-[Contributing](docs/CONTRIBUTING.md)
+[Contributing](docs/project/contributing.rst)
 
 </div>
 
@@ -44,7 +44,7 @@ Each model is loaded with its published weights/code from `models/` and invoked 
 
 ## Adding a New Prediction Method
 
-See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for a step-by-step guide.
+See [docs/project/contributing.rst](docs/project/contributing.rst) for a step-by-step guide.
 
 ## Features
 
