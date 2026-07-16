@@ -7,6 +7,15 @@ API_KEY_SUBJECT_PREFIX = "apikey"
 
 def get_client_ip(request) -> str:
     # Adjust if you sit behind a trusted proxy; otherwise REMOTE_ADDR is fine.
+    """
+    Return the client IP address from request metadata.
+
+    Args:
+        request (HttpRequest): Request object containing META headers.
+    Returns:
+        str: Client IP from X-Forwarded-For or REMOTE_ADDR.
+
+    """
     xff = request.META.get("HTTP_X_FORWARDED_FOR")
     if xff:
         return xff.split(",")[0].strip()
@@ -14,6 +23,12 @@ def get_client_ip(request) -> str:
 
 
 def _seconds_until_midnight_utc() -> int:
+    """
+    Return the number of seconds until the next UTC midnight.
+
+    Args: None.
+    Returns: int: Seconds remaining until midnight UTC.
+    """
     now = datetime.now(timezone.utc)
     reset = datetime.combine(
         (now + timedelta(days=1)).date(), datetime.min.time(), tzinfo=timezone.utc
@@ -22,6 +37,15 @@ def _seconds_until_midnight_utc() -> int:
 
 
 def _key(subject: str) -> str:
+    """
+    Build a daily quota key for the given subject.
+
+    Args:
+        subject (str): Subject identifier to include in the quota key.
+    Returns:
+        str: Quota key scoped to the current UTC date and subject.
+
+    """
     today = datetime.now(timezone.utc).date().isoformat()
     return f"quota:{today}:{subject}"
 
@@ -37,6 +61,15 @@ def api_key_quota_subject(api_key_or_id) -> str:
 
 
 def _parse_api_key_subject(subject: str) -> int | None:
+    """
+    Parse an API key subject and return its numeric identifier.
+
+    Args:
+        subject (str): Subject string expected to start with the API key prefix.
+    Returns:
+        int | None: Parsed identifier, or None if the subject is invalid.
+
+    """
     prefix = f"{API_KEY_SUBJECT_PREFIX}:"
     if not isinstance(subject, str) or not subject.startswith(prefix):
         return None

@@ -103,7 +103,10 @@ class SequenceExpansionPlan:
             if start == end:
                 skipped[reaction_position] = "Missing protein sequence"
                 continue
-            if all(self.children[index].processed_sequence is None for index in range(start, end)):
+            if all(
+                self.children[index].processed_sequence is None
+                for index in range(start, end)
+            ):
                 skipped[reaction_position] = "Sequence too long — row was excluded"
         return skipped
 
@@ -154,9 +157,13 @@ class SequenceExpansionPlan:
             for child_index in range(start, end):
                 child = self.children[child_index]
                 if child.reaction_position != reaction_position:
-                    raise ValueError("Sequence expansion mapped a child to the wrong reaction.")
+                    raise ValueError(
+                        "Sequence expansion mapped a child to the wrong reaction."
+                    )
                 if child.sequence_position != child_index - start:
-                    raise ValueError("Sequence positions are not contiguous within a reaction.")
+                    raise ValueError(
+                        "Sequence positions are not contiguous within a reaction."
+                    )
             cursor = end
             seen_reactions.append(reaction_position)
 
@@ -188,7 +195,9 @@ class TargetExpansionPlan:
     substrate_tokens_by_reaction: tuple[tuple[str, ...], ...]
     uses_substrate_slots: bool = False
 
-    def assert_result_count(self, values: Sequence[Any], label: str = "prediction") -> None:
+    def assert_result_count(
+        self, values: Sequence[Any], label: str = "prediction"
+    ) -> None:
         if len(values) != len(self.units):
             raise ValueError(
                 f"Expanded batch produced {len(values)} {label}(s) for "
@@ -268,11 +277,17 @@ def reduce_sequence_predictions(
             consumed += 1
             unit = plan.units[unit_index]
             error = errors.get(unit_index, "")
-            numeric_value = None if error else _finite_number(child_predictions[unit_index])
+            numeric_value = (
+                None if error else _finite_number(child_predictions[unit_index])
+            )
             if numeric_value is None and not error:
                 error = "Prediction could not be made"
 
-            source = str(child_sources[unit_index] or "") if numeric_value is not None else ""
+            source = (
+                str(child_sources[unit_index] or "")
+                if numeric_value is not None
+                else ""
+            )
             item: dict[str, Any] = {
                 "sequenceIndex": unit.sequence_position + 1,
                 "sequence": unit.sequence,
@@ -414,7 +429,9 @@ def _reduce_scalar(
 ) -> None:
     selected_unit: int | None = None
     if successful:
-        selected_unit, selected_value, selected_source = _select_success(target, successful)
+        selected_unit, selected_value, selected_source = _select_success(
+            target, successful
+        )
         unit = plan.units[selected_unit]
         predictions[reaction_position] = selected_value
         sources[reaction_position] = selected_source
@@ -452,12 +469,16 @@ def _reduce_per_substrate_slots(
             if plan.units[result[0]].substrate_position == substrate_position
         ]
         if candidates:
-            selected_unit, selected_value, selected_source = _select_success(target, candidates)
+            selected_unit, selected_value, selected_source = _select_success(
+                target, candidates
+            )
             values.append(selected_value)
             selected_units.add(selected_unit)
             selected_sources.append(selected_source)
             if not selected_sequences[reaction_position]:
-                selected_sequences[reaction_position] = plan.units[selected_unit].sequence
+                selected_sequences[reaction_position] = plan.units[
+                    selected_unit
+                ].sequence
         else:
             values.append(None)
 
@@ -467,7 +488,9 @@ def _reduce_per_substrate_slots(
             allow_nan=False,
             separators=(",", ":"),
         )
-        unique_sources = list(dict.fromkeys(source for source in selected_sources if source))
+        unique_sources = list(
+            dict.fromkeys(source for source in selected_sources if source)
+        )
         if len(unique_sources) == 1:
             sources[reaction_position] = f"{unique_sources[0]} (per substrate)"
         else:
@@ -561,6 +584,15 @@ def _normalise_child_errors(errors: dict[int, str], child_count: int) -> dict[in
 
 
 def _finite_number(value: Any) -> float | None:
+    """
+    Convert a value to a finite float when possible.
+
+    Args:
+        value (Any): Value to validate and convert.
+    Returns:
+        float | None: Finite float, or None if invalid, non-finite, or boolean.
+
+    """
     if value is None or isinstance(value, bool):
         return None
     if isinstance(value, Real):

@@ -19,6 +19,13 @@ _log = logging.getLogger(__name__)
 def run_and_stream(
     cmd, session_id: str, cwd: str | None = None, env: dict | None = None, fail_ok=False
 ):
+    """
+    Run a command, stream sanitized output to a progress session, and track its PID.
+    Args: cmd (Sequence[str]): Command and arguments; session_id (str): Progress session ID; cwd
+    (str | None): Working directory; env (dict | None): Environment; fail_ok (bool): Allow nonzero
+    exit.
+    Returns: None: Streams status lines and raises on failure unless cancelled or fail_ok is True.
+    """
     echoed = "$ " + " ".join(cmd)
     san_line = sanitise_log_line(echoed, TARGET_DBS)
     push_line(session_id, san_line)
@@ -64,7 +71,10 @@ def run_and_stream(
     if is_cancelled(session_id):
         _log.info(
             "Progress stream command cancelled",
-            extra={"event": "progress_stream.command_cancelled", "session_id": session_id},
+            extra={
+                "event": "progress_stream.command_cancelled",
+                "session_id": session_id,
+            },
         )
         return
     if rc is None:
@@ -74,6 +84,8 @@ def run_and_stream(
         push_line(session_id, f"[ERROR] Command failed with exit code {rc}")
         raise subprocess.CalledProcessError(rc, cmd)
     elif rc != 0 and fail_ok:
-        push_line(session_id, f"[WARN] Command returned non-zero exit code {rc} (continuing)")
+        push_line(
+            session_id, f"[WARN] Command returned non-zero exit code {rc} (continuing)"
+        )
     else:
         push_line(session_id, "[OK] Completed")
