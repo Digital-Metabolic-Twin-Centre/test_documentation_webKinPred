@@ -22,6 +22,7 @@ Supported engines
 - CataPro, kcat, Km, and kcat/Km.
 - CatPred, kcat and Km.
 - OmniESI, kcat and Km.
+- OmniESI + O2DENet, kcat and Km.
 - RealKcat, kcat and Km.
 - IECata, kcat/Km.
 - MMISA-KM, Km.

@@ -16,6 +16,9 @@ media/
 staticfiles/
 mmseqs_tmp/
 *.sqlite3
+docs/_build/
+docs/build/
+docs/autoapi/
 
 # Vendored model runtime data (generated / large)
 models/EITLEM/Weights/
