@@ -106,6 +106,15 @@ _REALKCAT_CLASS_RANGES: dict[str, dict[int, tuple[float, float]]] = {
 
 
 def _safe_clear_gpu_precompute_status(public_id: str) -> None:
+    """
+    Clear GPU precompute status telemetry on a best-effort basis.
+
+    Args:
+        public_id (str): Public identifier whose GPU precompute status should be cleared.
+    Returns:
+        None: This function does not return a value.
+
+    """
     try:
         clear_gpu_precompute_status(public_id)
     except Exception:
@@ -114,6 +123,13 @@ def _safe_clear_gpu_precompute_status(public_id: str) -> None:
 
 
 def _safe_refresh_about_stats_cache() -> None:
+    """
+    Safely refresh the about stats cache without interrupting jobs.
+
+    Returns:
+        None: This function does not return a value.
+
+    """
     try:
         refresh_about_stats_cache(force=True)
     except Exception:
@@ -122,6 +138,12 @@ def _safe_refresh_about_stats_cache() -> None:
 
 
 def _safe_mark_about_stats_cache_stale() -> None:
+    """
+    Mark the about stats cache as stale without interrupting execution.
+
+    Args: None.
+    Returns: None. This function does not return a value.
+    """
     try:
         mark_about_stats_cache_stale()
     except Exception:
@@ -129,7 +151,9 @@ def _safe_mark_about_stats_cache_stale() -> None:
         pass
 
 
-def _format_prediction_value_and_source(desc, target: str, prediction: Any) -> tuple[Any, str]:
+def _format_prediction_value_and_source(
+    desc, target: str, prediction: Any
+) -> tuple[Any, str]:
     """
     Return the output value and source string for one predicted row.
 
@@ -265,7 +289,9 @@ def run_both_prediction(
     job.start_time = timezone.now()
     job.predictions_made = 0
     job.total_predictions = 0
-    job.save(update_fields=["status", "start_time", "predictions_made", "total_predictions"])
+    job.save(
+        update_fields=["status", "start_time", "predictions_made", "total_predictions"]
+    )
 
     kcat_desc = get_method(kcat_key)
     km_desc = get_method(km_key)
@@ -388,7 +414,10 @@ def run_recon_xkg_cache_prediction(
     if job.status == "Completed":
         _log.info(
             "Skipping ReconXKG cache task — job already completed",
-            extra={"event": "recon_xkg.cache_task_duplicate_skipped", "job_public_id": public_id},
+            extra={
+                "event": "recon_xkg.cache_task_duplicate_skipped",
+                "job_public_id": public_id,
+            },
         )
         return
 
@@ -601,9 +630,8 @@ def execute_multi_prediction_job(
     disable_gpu_precompute: bool = False,
     recon_xkg: bool = False,
     prediction_cache_snapshot: dict[str, Any] | None = None,
-    similarity_cache_snapshot: dict[
-        str, tuple[float | None, float | None]
-    ] | None = None,
+    similarity_cache_snapshot: dict[str, tuple[float | None, float | None]]
+    | None = None,
     cache_only: bool = False,
 ) -> None:
     """Execute one job in-process; the Celery task and cache fast path share it."""
@@ -715,9 +743,8 @@ def _execute_multi_prediction(
     disable_gpu_precompute: bool = False,
     recon_xkg: bool = False,
     prediction_cache_snapshot: dict[str, Any] | None = None,
-    similarity_cache_snapshot: dict[
-        str, tuple[float | None, float | None]
-    ] | None = None,
+    similarity_cache_snapshot: dict[str, tuple[float | None, float | None]]
+    | None = None,
     cache_only: bool = False,
     defer_quota_refund: bool = False,
 ) -> int:
@@ -753,14 +780,18 @@ def _execute_multi_prediction(
         },
     )
 
-    eitlem_targets = [target for target in targets if desc_by_target[target].key == "EITLEM"]
+    eitlem_targets = [
+        target for target in targets if desc_by_target[target].key == "EITLEM"
+    ]
     last_eitlem_target = eitlem_targets[-1] if eitlem_targets else None
     # OmniESI and OmniESI-O2DENet share the same per-residue esm2 cache, so they
     # are coordinated as one family: embeddings are kept until the last target
     # across both methods has run.
     omniesi_family_keys = {"OmniESI", "OmniESI-O2DENet"}
     omniesi_targets = [
-        target for target in targets if desc_by_target[target].key in omniesi_family_keys
+        target
+        for target in targets
+        if desc_by_target[target].key in omniesi_family_keys
     ]
     last_omniesi_target = omniesi_targets[-1] if omniesi_targets else None
 
@@ -771,7 +802,9 @@ def _execute_multi_prediction(
         if desc.key == "EITLEM":
             extra_call_kwargs["cleanup_esm1v_embeddings"] = target == last_eitlem_target
         if desc.key in omniesi_family_keys:
-            extra_call_kwargs["cleanup_embeddings_after_run"] = target == last_omniesi_target
+            extra_call_kwargs["cleanup_embeddings_after_run"] = (
+                target == last_omniesi_target
+            )
 
         try:
             target_started = time.monotonic()
@@ -834,7 +867,8 @@ def _execute_multi_prediction(
         preferred_cols.extend([pred_col, source_col, extra_col])
 
     results_df = results_df[
-        preferred_cols + [column for column in results_df.columns if column not in preferred_cols]
+        preferred_cols
+        + [column for column in results_df.columns if column not in preferred_cols]
     ]
     out_path = _output_path(job.public_id)
     write_started = time.monotonic()
@@ -889,7 +923,9 @@ def _execute_multi_prediction(
     for target in targets:
         pred_col = target_results[target]["output_col"]
         fully_predicted = (
-            fully_predicted & (results_df[pred_col] != "") & results_df[pred_col].notna()
+            fully_predicted
+            & (results_df[pred_col] != "")
+            & results_df[pred_col].notna()
         )
     processed_reactions = int(fully_predicted.sum())
     to_refund = max(0, int(job.requested_rows) - processed_reactions)
@@ -1008,7 +1044,9 @@ def _execute_target_batch(
                 reaction_count=n_rows,
             )
         except ValueError as exc:
-            raise PredictionError(f"{desc.display_name} result mapping failed: {exc}") from exc
+            raise PredictionError(
+                f"{desc.display_name} result mapping failed: {exc}"
+            ) from exc
 
         return {
             "preds": reduced.predictions,
@@ -1087,7 +1125,9 @@ def _execute_target_batch(
                 reaction_count=n_rows,
             )
         except ValueError as exc:
-            raise PredictionError(f"{desc.display_name} result mapping failed: {exc}") from exc
+            raise PredictionError(
+                f"{desc.display_name} result mapping failed: {exc}"
+            ) from exc
         return {
             "preds": reduced.predictions,
             "sources": reduced.sources,
@@ -1138,6 +1178,20 @@ def _execute_native_target_batch(
     prediction_cache_snapshot: dict[str, Any] | None = None,
     cache_only: bool = False,
 ) -> dict[str, Any]:
+    """
+    Execute native batch predictions for a target and apply optional experimental overrides.
+    Args: job (Job): Prediction job; desc: method descriptor; df (pd.DataFrame): source rows; target
+    (str): output target; sequences (list[Any]): input sequences; processed_by_reaction (list[Any]):
+    processed inputs; valid_reaction_indices (list[int]): rows to predict; experimental_results
+    (list[dict[str, Any]]): override data; canonicalize_substrates (bool): canonicalization flag;
+    disable_gpu_precompute (bool): GPU precompute flag; extra_call_kwargs (dict[str, Any]): extra
+    predictor kwargs; call_kwargs_override (dict[str, list[Any]] | None): explicit kwargs;
+    apply_experimental_overrides (bool): apply overrides; recon_xkg (bool): use XKG mode;
+    cache_stats (dict[str, int] | None): cache counters; prediction_cache_snapshot (dict[str, Any] |
+    None): cache state; cache_only (bool): require cached predictions.
+    Returns: dict[str, Any]: Predictions, sources, extra metadata, failures, selected sequences, and
+    output column.
+    """
     n_rows = len(sequences)
     predictions: list[Any] = [""] * n_rows
     sources: list[str] = [""] * n_rows
@@ -1151,11 +1205,14 @@ def _execute_native_target_batch(
                     f"Missing column required for {desc.display_name}: {column}"
                 )
             call_kwargs[kwarg_name] = [
-                df[column].iloc[reaction_index] for reaction_index in valid_reaction_indices
+                df[column].iloc[reaction_index]
+                for reaction_index in valid_reaction_indices
             ]
     call_kwargs.update(desc.target_kwargs.get(target, {}))
     call_kwargs.update(extra_call_kwargs)
-    processed_sequences = [processed_by_reaction[index] for index in valid_reaction_indices]
+    processed_sequences = [
+        processed_by_reaction[index] for index in valid_reaction_indices
+    ]
 
     if processed_sequences:
         subset, invalid_subset = _invoke_method_prediction(
@@ -1238,6 +1295,26 @@ def _apply_expanded_experimental_overrides(
     details: list[str],
     child_errors: dict[int, str],
 ) -> None:
+    """
+    Apply matching experimental kcat/Km overrides to expanded substrate children.
+
+    Args:
+        job (Job): Current job used for logging mismatches.
+        desc: Descriptor metadata used for labels and extra info.
+        target (str): Parameter to override; only "kcat" and "Km" are supported.
+        sequences (list[Any]): Reaction sequences used to validate experimental matches.
+        plan (SubstrateExpansionPlan): Expansion plan containing child positions.
+        experimental_results (list[dict[str, Any]]): Experimental lookup results by
+        reaction/substrate index.
+        values (list[Any]): Mutable child values to update in place.
+        sources (list[str]): Mutable source labels to update in place.
+        details (list[str]): Mutable detail strings to update in place.
+        child_errors (dict[int, str]): Mutable child error map cleared for successful overrides.
+
+    Returns:
+        None: Updates the provided lists and error map in place.
+
+    """
     if target not in {"kcat", "Km"}:
         return
     exp_key = "kcat_value" if target == "kcat" else "km_value"
@@ -1256,7 +1333,9 @@ def _apply_expanded_experimental_overrides(
         previous = values[child_index]
         values[child_index] = exp[exp_key]
         sources[child_index] = _source(exp)
-        details[child_index] = build_extra_info(exp, target, previous, desc.display_name)
+        details[child_index] = build_extra_info(
+            exp, target, previous, desc.display_name
+        )
         child_errors.pop(child_index, None)
 
 
@@ -1272,6 +1351,16 @@ def _apply_unit_experimental_overrides(
     details: list[str],
     child_errors: dict[int, str],
 ) -> None:
+    """
+    Apply matching experimental kcat/Km overrides to expanded target units.
+    Args:
+        job (Job): Current job for mismatch logging; desc: Target descriptor; target (str): Target
+        name; plan (TargetExpansionPlan): Expanded units; experimental_results (list[dict[str,
+        Any]]): Experimental matches; values/sources/details/child_errors: Mutable per-unit outputs.
+    Returns:
+        None: Mutates values, sources, details, and child_errors in place.
+
+    """
     if target not in {"kcat", "Km"}:
         return
     exp_key = "kcat_value" if target == "kcat" else "km_value"
@@ -1285,7 +1374,9 @@ def _apply_unit_experimental_overrides(
         if item.get("found")
     }
     for unit_index, unit in enumerate(plan.units):
-        substrate_idx = unit.substrate_position if unit.substrate_position is not None else 0
+        substrate_idx = (
+            unit.substrate_position if unit.substrate_position is not None else 0
+        )
         exp = by_position.get(
             (
                 unit.reaction_position,
@@ -1317,6 +1408,14 @@ def _apply_native_experimental_overrides(
     extra: list[str],
     failed_reactions: dict[int, str],
 ) -> None:
+    """
+    Apply matching native experimental kcat/Km overrides to prediction outputs.
+    Args: job (Job): Current job for logging; desc: descriptor metadata; target (str): metric name;
+    sequences (list[Any]), experimental_results (list[dict[str, Any]]), predictions (list[Any]),
+    sources (list[str]), extra (list[str]), failed_reactions (dict[int, str]): mutable reaction data
+    updated in place.
+    Returns: None: Updates predictions, sources, extra, and failed_reactions in place.
+    """
     if target not in {"kcat", "Km"}:
         return
     exp_key = "kcat_value" if target == "kcat" else "km_value"
@@ -1324,7 +1423,9 @@ def _apply_native_experimental_overrides(
         if not exp.get("found") or exp_key not in exp:
             continue
         reaction_index = exp.get("reaction_idx", exp.get("idx"))
-        if not isinstance(reaction_index, int) or not 0 <= reaction_index < len(sequences):
+        if not isinstance(reaction_index, int) or not 0 <= reaction_index < len(
+            sequences
+        ):
             continue
         if not _experimental_sequence_matches(exp, sequences[reaction_index]):
             _log_experimental_mismatch(job, desc, target, reaction_index)
@@ -1332,16 +1433,44 @@ def _apply_native_experimental_overrides(
         previous = predictions[reaction_index]
         predictions[reaction_index] = exp[exp_key]
         sources[reaction_index] = _source(exp)
-        extra[reaction_index] = build_extra_info(exp, target, previous, desc.display_name)
+        extra[reaction_index] = build_extra_info(
+            exp, target, previous, desc.display_name
+        )
         failed_reactions.pop(reaction_index, None)
 
 
 def _experimental_sequence_matches(exp: dict[str, Any], sequence: Any) -> bool:
+    """
+    Return whether an experiment's recorded protein sequence matches the given sequence.
+
+    Args:
+        exp (dict[str, Any]): Experiment data that may include a protein_sequence value.
+        sequence (Any): Sequence value to compare against the recorded value.
+
+    Returns:
+        bool: True if no sequence is recorded or it matches sequence; otherwise False.
+
+    """
     recorded = exp.get("protein_sequence")
     return recorded is None or recorded == sequence
 
 
-def _log_experimental_mismatch(job: Job, desc, target: str, reaction_index: int) -> None:
+def _log_experimental_mismatch(
+    job: Job, desc, target: str, reaction_index: int
+) -> None:
+    """
+    Log a warning when experimental overwrite is skipped due to sequence mismatch.
+
+    Args:
+        job (Job): Job associated with the prediction.
+        desc (Any): Method descriptor containing the method key.
+        target (str): Target protein identifier or sequence.
+        reaction_index (int): Index of the affected reaction row.
+
+    Returns:
+        None: This function only emits a log entry.
+
+    """
     _log.warning(
         "Skipping experimental overwrite because protein sequence mismatched",
         extra={
@@ -1355,6 +1484,14 @@ def _log_experimental_mismatch(job: Job, desc, target: str, reaction_index: int)
 
 
 def _prediction_is_missing(value: Any) -> bool:
+    """
+    Return whether a prediction value should be treated as missing.
+    Args:
+        value (Any): Value to check for None, blank strings, "none", "nan", or pandas NA.
+    Returns:
+        bool: True if the value is missing; otherwise False.
+
+    """
     if value is None:
         return True
     if isinstance(value, str):
@@ -1366,6 +1503,18 @@ def _prediction_is_missing(value: Any) -> bool:
 
 
 def _append_skip_reason(reasons: dict[int, str], row_index: int, reason: str) -> None:
+    """
+    Append a skip reason for a row if it is not already recorded.
+
+    Args:
+        reasons (dict[int, str]): Mapping of row indexes to skip reasons.
+        row_index (int): Row index to update.
+        reason (str): Reason to append.
+
+    Returns:
+        None: Updates reasons in place.
+
+    """
     previous = reasons.get(row_index, "")
     if reason and reason not in previous:
         reasons[row_index] = f"{previous}; {reason}" if previous else reason
@@ -1511,7 +1660,8 @@ def _run_method_engine(
                 invalid_reasons = invalid_result
             else:
                 invalid_reasons = {
-                    idx: "Prediction could not be made" for idx in (invalid_result or [])
+                    idx: "Prediction could not be made"
+                    for idx in (invalid_result or [])
                 }
             return _validate_method_result(desc, sequences, preds, invalid_reasons)
 
@@ -1525,7 +1675,9 @@ def _run_method_engine(
             )
             return _validate_method_result(desc, sequences, preds, invalid_reasons)
 
-    raise PredictionError(f"{desc.display_name} is not configured with a prediction engine.")
+    raise PredictionError(
+        f"{desc.display_name} is not configured with a prediction engine."
+    )
 
 
 def _recon_xkg_unit_keys(
@@ -1610,7 +1762,9 @@ def _invoke_method_prediction_cached(
             "units": n,
             "cached_values": len(cached),
             "cache_only": cache_only,
-            "source": "snapshot" if cache_only or cache_snapshot is not None else "store",
+            "source": "snapshot"
+            if cache_only or cache_snapshot is not None
+            else "store",
             "elapsed_ms": round((time.monotonic() - read_started) * 1000, 2),
         },
     )
@@ -1670,7 +1824,11 @@ def _invoke_method_prediction_cached(
         miss_sequences = [sequences[i] for i in miss_indices]
         miss_kwargs: dict[str, Any] = {}
         for kwarg, value in call_kwargs.items():
-            if kwarg in aligned and isinstance(value, (list, tuple)) and len(value) == n:
+            if (
+                kwarg in aligned
+                and isinstance(value, (list, tuple))
+                and len(value) == n
+            ):
                 miss_kwargs[kwarg] = [value[i] for i in miss_indices]
             else:
                 miss_kwargs[kwarg] = value
@@ -1875,7 +2033,9 @@ def _build_skipped_message(skipped_reasons: dict[int, str]) -> str:
     groups: dict[str, list[int]] = {}
     for idx, reason in skipped_reasons.items():
         groups.setdefault(reason, []).append(idx)
-    return json.dumps([{"rows": sorted(rows), "reason": reason} for reason, rows in groups.items()])
+    return json.dumps(
+        [{"rows": sorted(rows), "reason": reason} for reason, rows in groups.items()]
+    )
 
 
 def _load_input(job: Job) -> pd.DataFrame:
@@ -1897,6 +2057,14 @@ def _load_recon_xkg_preflight_dataframe(public_id: str) -> pd.DataFrame:
 
 
 def _output_path(public_id: str) -> str:
+    """
+    Build the output CSV path for a job.
+    Args:
+        public_id (str): Public job identifier.
+    Returns:
+        str: Absolute path to the job output CSV.
+
+    """
     return os.path.join(settings.MEDIA_ROOT, "jobs", str(public_id), "output.csv")
 
 

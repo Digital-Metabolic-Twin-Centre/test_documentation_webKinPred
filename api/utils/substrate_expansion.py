@@ -32,13 +32,26 @@ class SubstrateExpansionPlan:
         substrate_values: Sequence[Any],
         reaction_positions: Iterable[int],
     ) -> "SubstrateExpansionPlan":
+        """
+        Build a substrate expansion plan for the selected reaction positions.
+
+        Args:
+            substrate_values (Sequence[Any]): Input substrates indexed by reaction position.
+            reaction_positions (Iterable[int]): Positions to expand within substrate_values.
+
+        Returns:
+            SubstrateExpansionPlan: Plan containing expanded substrates and reaction slices.
+
+        """
         children: list[ExpandedSubstrate] = []
         slices: list[tuple[int, int, int]] = []
         positions = tuple(int(position) for position in reaction_positions)
 
         for reaction_position in positions:
             if reaction_position < 0 or reaction_position >= len(substrate_values):
-                raise ValueError(f"Reaction position {reaction_position} is outside the input data.")
+                raise ValueError(
+                    f"Reaction position {reaction_position} is outside the input data."
+                )
             start = len(children)
             for substrate_position, substrate in enumerate(
                 split_substrate_list(substrate_values[reaction_position])
@@ -61,15 +74,48 @@ class SubstrateExpansionPlan:
         return plan
 
     def expanded_sequences(self, sequences: Sequence[Any]) -> list[Any]:
+        """
+        Return child-linked items from the provided sequence collection.
+
+        Args:
+            sequences (Sequence[Any]): Items indexed by each child's reaction position.
+        Returns:
+            list[Any]: Items selected for this node's children.
+
+        """
         return [sequences[child.reaction_position] for child in self.children]
 
     def expanded_parent_values(self, values: Sequence[Any]) -> list[Any]:
+        """
+        Return values for each child using its reaction position.
+
+        Args:
+            values (Sequence[Any]): Source sequence indexed by each child's reaction_position.
+        Returns:
+            list[Any]: Values selected for this node's children.
+
+        """
         return [values[child.reaction_position] for child in self.children]
 
     def expanded_substrates(self) -> list[str]:
+        """
+        Return the substrates from all child objects.
+
+        Returns:
+            list[str]: Substrate values collected from each child.
+
+        """
         return [child.substrate for child in self.children]
 
-    def assert_result_count(self, values: Sequence[Any], label: str = "prediction") -> None:
+    def assert_result_count(
+        self, values: Sequence[Any], label: str = "prediction"
+    ) -> None:
+        """
+        Validate that result count matches the number of child inputs.
+        Args: values (Sequence[Any]): Results to validate; label (str): Result label for error
+        messages.
+        Returns: None: Raises ValueError if counts differ.
+        """
         if len(values) != len(self.children):
             raise ValueError(
                 f"Expanded batch produced {len(values)} {label}(s) for "
@@ -77,6 +123,12 @@ class SubstrateExpansionPlan:
             )
 
     def _assert_invariants(self) -> None:
+        """
+        Validate substrate expansion slice and child ordering invariants.
+
+        Args: self: Expansion instance containing reaction slices and children.
+        Returns: None; raises ValueError if any invariant is violated.
+        """
         cursor = 0
         seen_reactions: list[int] = []
         for reaction_position, start, end in self.reaction_slices:
@@ -85,9 +137,13 @@ class SubstrateExpansionPlan:
             for child_index in range(start, end):
                 child = self.children[child_index]
                 if child.reaction_position != reaction_position:
-                    raise ValueError("Substrate expansion mapped a child to the wrong reaction.")
+                    raise ValueError(
+                        "Substrate expansion mapped a child to the wrong reaction."
+                    )
                 if child.substrate_position != child_index - start:
-                    raise ValueError("Substrate positions are not contiguous within a reaction.")
+                    raise ValueError(
+                        "Substrate positions are not contiguous within a reaction."
+                    )
             cursor = end
             seen_reactions.append(reaction_position)
 
@@ -99,6 +155,18 @@ class SubstrateExpansionPlan:
 
 @dataclass(frozen=True)
 class ReducedSubstrateResults:
+    """
+    Container for reduced substrate prediction results.
+
+    Args:
+        predictions (list[Any]): Predicted results; sources (list[str]): Source identifiers;
+        extra_info (list[str]): Additional details; failed_reactions (dict[int, str]): Failed
+        reaction messages by index.
+    Returns:
+        ReducedSubstrateResults: Structured prediction results.
+
+    """
+
     predictions: list[Any]
     sources: list[str]
     extra_info: list[str]
@@ -153,11 +221,17 @@ def reduce_substrate_predictions(
             consumed += 1
             child = plan.children[child_index]
             error = errors.get(child_index, "")
-            numeric_value = None if error else _finite_number(child_predictions[child_index])
+            numeric_value = (
+                None if error else _finite_number(child_predictions[child_index])
+            )
             if numeric_value is None and not error:
                 error = "Prediction could not be made"
 
-            source = str(child_sources[child_index] or "") if numeric_value is not None else ""
+            source = (
+                str(child_sources[child_index] or "")
+                if numeric_value is not None
+                else ""
+            )
             item: dict[str, Any] = {
                 "substrateIndex": child.substrate_position + 1,
                 "substrate": child.substrate,
@@ -204,7 +278,9 @@ def reduce_substrate_predictions(
                 if len(unique_sources) == 1:
                     sources[reaction_position] = f"{unique_sources[0]} (per substrate)"
                 else:
-                    sources[reaction_position] = "Mixed per-substrate sources; see Extra Info"
+                    sources[reaction_position] = (
+                        "Mixed per-substrate sources; see Extra Info"
+                    )
             else:
                 reason = _failure_reason(items)
                 sources[reaction_position] = reason
@@ -245,6 +321,12 @@ def _failure_reason(items: list[dict[str, Any]]) -> str:
 
 
 def _normalise_child_errors(errors: dict[int, str], child_count: int) -> dict[int, str]:
+    """
+    Normalize child error mappings to valid child indexes.
+    Args: errors (dict[int, str]): Raw index-to-error messages; child_count (int): Number of
+    children allowed.
+    Returns: dict[int, str]: Valid integer indexes mapped to non-empty error reasons.
+    """
     out: dict[int, str] = {}
     for raw_index, raw_reason in errors.items():
         try:
@@ -258,6 +340,16 @@ def _normalise_child_errors(errors: dict[int, str], child_count: int) -> dict[in
 
 
 def _finite_number(value: Any) -> float | None:
+    """
+    Convert a value to a finite float when possible.
+
+    Args:
+        value (Any): Value to validate and convert; None, bool, invalid strings, and non-finite
+        values are rejected.
+    Returns:
+        float | None: Finite float value, or None if conversion fails or value is non-finite.
+
+    """
     if value is None or isinstance(value, bool):
         return None
     if isinstance(value, Real):

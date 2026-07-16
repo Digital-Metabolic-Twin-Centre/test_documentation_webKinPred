@@ -46,6 +46,15 @@ def require_api_key(view_func):
     @csrf_exempt
     @wraps(view_func)
     def wrapper(request, *args, **kwargs):
+        """
+        Authenticate a request with a bearer API key and attach API context.
+        Args:
+            request (HttpRequest): Incoming Django request; *args (Any): Positional view args;
+            **kwargs (Any): Keyword view args.
+        Returns:
+            HttpResponse: Downstream view response or authentication/authorization error JSON.
+
+        """
         from api.models import ApiKey  # local import to avoid circular imports
 
         auth_header = request.META.get("HTTP_AUTHORIZATION", "")
@@ -64,7 +73,9 @@ def require_api_key(view_func):
         token = auth_header[len("Bearer ") :].strip()
 
         try:
-            api_key = ApiKey.objects.select_related("user").get(key=token, is_active=True)
+            api_key = ApiKey.objects.select_related("user").get(
+                key=token, is_active=True
+            )
         except ApiKey.DoesNotExist:
             return JsonResponse(
                 {"error": "Invalid or revoked API key."},
@@ -73,7 +84,9 @@ def require_api_key(view_func):
 
         if api_key.user.is_blocked:
             return JsonResponse(
-                {"error": "This account has been suspended. Contact the administrators."},
+                {
+                    "error": "This account has been suspended. Contact the administrators."
+                },
                 status=403,
             )
 

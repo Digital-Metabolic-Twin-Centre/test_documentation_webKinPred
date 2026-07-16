@@ -7,11 +7,29 @@ import random
 
 
 def generate_public_id(length=7):
+    """
+    Generate a random alphanumeric public identifier.
+
+    Args:
+        length (int): Number of characters in the generated identifier.
+    Returns:
+        str: Random alphanumeric identifier.
+
+    """
     chars = string.ascii_letters + string.digits
     return "".join(random.choices(chars, k=length))
 
 
 class ApiUser(models.Model):
+    """
+    Represent an API user identified by IP address with quota and block status.
+    Args:
+        ip_address (str): Unique IP address associated with the user.
+    Returns:
+        ApiUser: User record with job counts and effective daily limit helpers.
+
+    """
+
     ip_address = models.GenericIPAddressField(unique=True)
     custom_daily_limit = models.PositiveIntegerField(
         null=True,
@@ -24,30 +42,81 @@ class ApiUser(models.Model):
     notes = models.TextField(blank=True, help_text="Admin notes about this user")
 
     class Meta:
+        """
+        Defines display metadata for similarity store entry records.
+
+        Args:
+            None: This metadata class accepts no parameters.
+
+        Returns:
+            None: Provides model naming metadata for administrative display.
+
+        """
+
         ordering = ["-last_seen"]
         verbose_name = "API User"
         verbose_name_plural = "API Users"
 
     def __str__(self):
+        """
+        Return a compact string identifier for the simulation.
+
+        Args:
+            None.
+
+        Returns:
+            str: Simulation label including dataset and truncated lookup key.
+
+        """
         return f"{self.ip_address} ({'blocked' if self.is_blocked else 'active'})"
 
     @property
     def total_jobs(self):
+        """
+        Return the total number of jobs associated with this instance.
+
+        Returns:
+            int: Count of related jobs in the job set.
+
+        """
         return self.job_set.count()
 
     @property
     def jobs_today(self):
+        """
+        Return the number of jobs submitted today.
+
+        Args:
+            None.
+        Returns:
+            int: Count of related jobs with a submission date of today.
+
+        """
         today = timezone.now().date()
         return self.job_set.filter(submission_time__date=today).count()
 
     @property
     def effective_daily_limit(self):
+        """
+        Return the effective daily quota limit for this instance.
+
+        Returns:
+            int: Custom daily limit if set, otherwise the default daily limit.
+
+        """
         from api.utils.quotas import DAILY_LIMIT
 
         return self.custom_daily_limit or DAILY_LIMIT
 
 
 class Job(models.Model):
+    """
+    Represents a prediction job and tracks submission metadata, status, outputs, and progress.
+    Args: *args (Any): Positional arguments passed to Django's model save; **kwargs (Any): Keyword
+    arguments passed to Django's model save.
+    Returns: None: Saves the job, generating a unique public_id when missing.
+    """
+
     job_id = models.AutoField(primary_key=True)
     public_id = models.CharField(max_length=10, unique=True)
     prediction_type = models.CharField(max_length=32)
@@ -93,6 +162,15 @@ class Job(models.Model):
     user = models.ForeignKey(ApiUser, on_delete=models.SET_NULL, null=True, blank=True)
 
     def save(self, *args, **kwargs):
+        """
+        Save the job, generating a unique public ID when missing.
+        Args:
+            *args: Positional arguments passed to the parent save method.
+            **kwargs: Keyword arguments passed to the parent save method.
+        Returns:
+            None: Persists the model instance.
+
+        """
         if not self.public_id:
             while True:
                 pid = generate_public_id()
@@ -103,6 +181,16 @@ class Job(models.Model):
 
 
 class JobProgressStage(models.Model):
+    """
+    Stores progress metrics and embedding state for a job stage.
+
+    Args:
+        job (Job): Parent job; stage_index (int): Stage order; target (str): Target name.
+    Returns:
+        str: Human-readable identifier via __str__.
+
+    """
+
     STATUS_CHOICES = [
         ("pending", "pending"),
         ("running", "running"),
@@ -120,7 +208,9 @@ class JobProgressStage(models.Model):
         ("error", "error"),
     ]
 
-    job = models.ForeignKey(Job, on_delete=models.CASCADE, related_name="progress_stages")
+    job = models.ForeignKey(
+        Job, on_delete=models.CASCADE, related_name="progress_stages"
+    )
     stage_index = models.PositiveIntegerField()
     target = models.CharField(max_length=32)
     method_key = models.CharField(max_length=50)
@@ -154,6 +244,16 @@ class JobProgressStage(models.Model):
     embedding_remaining = models.IntegerField(default=0)
 
     class Meta:
+        """
+        Defines display names for the ReconXKG allowed key model in Django admin.
+
+        Args:
+            None: This metadata class accepts no parameters.
+        Returns:
+            None: Provides Django model metadata only.
+
+        """
+
         ordering = ["job_id", "stage_index"]
         constraints = [
             models.UniqueConstraint(
@@ -167,6 +267,13 @@ class JobProgressStage(models.Model):
         ]
 
     def __str__(self):
+        """
+        Return a compact string representation of this request.
+
+        Returns:
+            str: Formatted method, target, model version, and truncated lookup key.
+
+        """
         return f"{self.job.public_id}#{self.stage_index}:{self.target} ({self.status})"
 
 
@@ -226,11 +333,28 @@ class ApiKey(models.Model):
     )
 
     class Meta:
+        """
+        Defines display names for the ReconXKG allowed key model in Django admin.
+
+        Args:
+            None: This metadata class accepts no parameters.
+        Returns:
+            None: Provides Django model metadata only.
+
+        """
+
         ordering = ["-created_at"]
         verbose_name = "API Key"
         verbose_name_plural = "API Keys"
 
     def __str__(self):
+        """
+        Return a readable representation of the recon_xkg key state.
+
+        Returns:
+            str: Formatted key prefix with active or inactive status.
+
+        """
         status = "active" if self.is_active else "revoked"
         label = self.label or "Unnamed"
         return f"{label} ({self.key[:10]}…) [{status}]"
@@ -268,11 +392,28 @@ class AboutStatsCache(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        """
+        Defines metadata options for the API User model.
+
+        Args:
+            None: This class does not accept parameters.
+        Returns:
+            None: Provides Django model metadata configuration.
+
+        """
+
         ordering = ["-updated_at"]
         verbose_name = "About Stats Cache"
         verbose_name_plural = "About Stats Cache"
 
     def __str__(self):
+        """
+        Return a readable representation of the IP address status.
+
+        Returns:
+            str: IP address followed by its blocked or active status.
+
+        """
         state = "stale" if self.is_stale else "fresh"
         return f"{self.key} [{state}]"
 
@@ -307,10 +448,24 @@ class ReconXkgAllowedKey(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        """
+        Defines model metadata for API key records.
+
+        Args: None.
+        Returns: None; configures ordering and display names.
+        """
+
         verbose_name = "ReconXKG Allowed Key"
         verbose_name_plural = "ReconXKG Allowed Keys"
 
     def __str__(self):
+        """
+        Return a human-readable representation of the key.
+
+        Returns:
+            str: Label, shortened key prefix, and active/revoked status.
+
+        """
         state = "active" if self.is_active else "inactive"
         return f"recon_xkg:{self.api_key.key_prefix} [{state}]"
 
@@ -347,6 +502,12 @@ class PredictionStore(models.Model):
     updated_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
+        """
+        Define ordering and uniqueness rules for job progress stages.
+        Args: None.
+        Returns: None; Django model metadata configuration.
+        """
+
         verbose_name = "Prediction Store Entry"
         verbose_name_plural = "Prediction Store Entries"
         indexes = [
@@ -364,7 +525,16 @@ class PredictionStore(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.method}/{self.target}@{self.model_version}:{self.lookup_key[:12]}"
+        """
+        Return a readable string representation of the stage target.
+
+        Returns:
+            str: Formatted job public ID, stage index, target, and status.
+
+        """
+        return (
+            f"{self.method}/{self.target}@{self.model_version}:{self.lookup_key[:12]}"
+        )
 
 
 class SimilarityStore(models.Model):
@@ -389,8 +559,25 @@ class SimilarityStore(models.Model):
     updated_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
+        """
+        Defines metadata options for the API User model.
+
+        Args:
+            None: This class does not accept parameters.
+        Returns:
+            None: Provides Django model metadata configuration.
+
+        """
+
         verbose_name = "Similarity Store Entry"
         verbose_name_plural = "Similarity Store Entries"
 
     def __str__(self):
+        """
+        Return a readable representation of the IP address status.
+
+        Returns:
+            str: IP address followed by its blocked or active status.
+
+        """
         return f"sim:{self.dataset_label}:{self.lookup_key[:12]}"
