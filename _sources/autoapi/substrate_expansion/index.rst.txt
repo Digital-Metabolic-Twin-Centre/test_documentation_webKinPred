@@ -1,0 +1,110 @@
+substrate_expansion
+===================
+
+.. py:module:: substrate_expansion
+
+.. autoapi-nested-parse::
+
+   Position-safe expansion and reduction for ``Substrates`` CSV inputs.
+
+
+
+
+
+
+
+Module Contents
+---------------
+
+.. py:class:: ExpandedSubstrate
+
+   One flattened protein/substrate pair and its original positions.
+
+
+.. py:class:: SubstrateExpansionPlan
+
+   A positional mapping between reaction rows and flattened substrates.
+
+
+   .. py:method:: build(substrate_values: Sequence[Any], reaction_positions: Iterable[int]) -> SubstrateExpansionPlan
+      :classmethod:
+
+
+      Build a substrate expansion plan for the selected reaction positions.
+
+      :param substrate_values: Input substrates indexed by reaction position.
+      :type substrate_values: Sequence[Any]
+      :param reaction_positions: Positions to expand within substrate_values.
+      :type reaction_positions: Iterable[int]
+
+      :returns: Plan containing expanded substrates and reaction slices.
+      :rtype: SubstrateExpansionPlan
+
+
+
+   .. py:method:: expanded_sequences(sequences: Sequence[Any]) -> list[Any]
+
+      Return child-linked items from the provided sequence collection.
+
+      :param sequences: Items indexed by each child's reaction position.
+      :type sequences: Sequence[Any]
+
+      :returns: Items selected for this node's children.
+      :rtype: list[Any]
+
+
+
+   .. py:method:: expanded_parent_values(values: Sequence[Any]) -> list[Any]
+
+      Return values for each child using its reaction position.
+
+      :param values: Source sequence indexed by each child's reaction_position.
+      :type values: Sequence[Any]
+
+      :returns: Values selected for this node's children.
+      :rtype: list[Any]
+
+
+
+   .. py:method:: expanded_substrates() -> list[str]
+
+      Return the substrates from all child objects.
+
+      :returns: Substrate values collected from each child.
+      :rtype: list[str]
+
+
+
+   .. py:method:: assert_result_count(values: Sequence[Any], label: str = 'prediction') -> None
+
+      Validate that result count matches the number of child inputs.
+      Args: values (Sequence[Any]): Results to validate; label (str): Result label for error
+      messages.
+      Returns: None: Raises ValueError if counts differ.
+
+
+
+.. py:class:: ReducedSubstrateResults
+
+   Container for reduced substrate prediction results.
+
+   :param predictions: Predicted results; sources (list[str]): Source identifiers;
+   :type predictions: list[Any]
+   :param extra_info: Additional details; failed_reactions (dict[int, str]): Failed
+   :type extra_info: list[str]
+   :param reaction messages by index.:
+
+   :returns: Structured prediction results.
+   :rtype: ReducedSubstrateResults
+
+
+.. py:function:: split_substrate_list(value: Any) -> list[str]
+
+   Split a semicolon list, trimming and ignoring empty separator fragments.
+
+
+.. py:function:: reduce_substrate_predictions(*, plan: SubstrateExpansionPlan, target: str, child_predictions: Sequence[Any], child_sources: Sequence[str], child_errors: dict[int, str] | None, child_details: Sequence[str] | None, reaction_count: int) -> ReducedSubstrateResults
+
+   Reduce flattened child results back to their original reaction rows.
+
+
